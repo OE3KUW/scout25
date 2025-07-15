@@ -48,6 +48,9 @@ volatile int tenMSecFlag;
 
 
 volatile int vL, vR, LDir, RDir;
+volatile int impulsCntL, impulsCntR;
+float correctionRL; 
+
 volatile float batteryLevel = 0.;
 volatile int motorSys = 0;
 String motorSysFromEEPROM = "";
@@ -58,9 +61,12 @@ int xMin = 32767, xMax = -32768;
 int yMin = 32767, yMax = -32768;
 int16_t  x, y, z;
 int mfcInitialized = FALSE;
-bool isCalibrated = FALSE;
+int isCalibrated = FALSE;
 const uint8_t impulsL = 14;
 const uint8_t impulsR = 27;
+float angle;
+int speed, diff;
+int speedMin;
 
 void preSet(void);
 void store2EEPROM(String word, int address);
@@ -68,19 +74,21 @@ String readFromEEPROM(int address);
 
 void rototateByCompass(int degree); 
 void drive(int left, int right);
+void driveC(int l, int r);
 
 void onBoardLedOn(void);
 void onBoardLedOff(void);
 
 int  initMFC(void);
+void preppareMfsCalibrationSystem(void);
 int  calibrateMFC(void);
+void readRawMFC(int16_t* x, int16_t* y, int16_t* z);
 float getMFC_Angle();
 
 void impuls_R_isr(void);
 void impuls_L_isr(void);
 
-void readRawMFC(int16_t* x, int16_t* y, int16_t* z);
-void scanI2CBus(); 
+void scanI2CBus();   // for tests
 
 
 void setup() 
@@ -151,9 +159,7 @@ void setup()
 
     Wire.begin(21, 22);
     
-    watch = 100;  while(watch); // wait for some 100 msec
 
-    x = initMFC();
     
     printf("\n______________________________________________________________________________________\n");
     printf("start!\n");
@@ -161,49 +167,85 @@ void setup()
     printf("motorSystem: %d\n", motorSys);
     printf("ssid: %s\n", ssidWord);
     printf("password: %s\n", password);
-    printf("magneticfield-sesor: %d\n", x);
+    printf("magneticfield-sesor: %d\n", initMFC());
 
     // scanI2CBus();  for tests
 
-//  rotate for 360°: as long, as the compass system is calibrated
+    //  rotate for 360° - calibrate mfs-system and count impulses : 
 
-    drive(80, -80);
+    // zuerst beginne ganz langsam und finde die kleinste Gschwindigkeit, bei der sich beide Motoren drehen. 
 
-    xMin = yMin = 32767;
-    xMax = yMax = -32768;
-
-  
-    while (calibrateMFC() != TRUE);
-    // one second addidionall - to be sure! 
-
-    watch = 1000;  
-    onBoardLedOn();
-    while(watch) // wait for some seconds 
+    speed = 0; 
+    drive(0,0);
+    impulsCntL = impulsCntR = 0;
+    preppareMfsCalibrationSystem();
+    
+    while ((impulsCntL < 10) && (impulsCntR < 10))
     {
+        drive(speed, -speed);
+        watch = 100; while(watch);
+        speed += 5;
         calibrateMFC();
     }
+    speedMin = speed;
+    printf("speedMin: %d\n", speedMin);
+
+
+    watch = 5000;   // Timeout for calibrate
     onBoardLedOff();
-
-    x = (int) getMFC_Angle();
-
-    while (((x > 3) || (x < 3))) 
+    drive(speedMin, -speedMin);
+ 
+    while ((calibrateMFC() != TRUE) && watch);
     {
-        x = (int) getMFC_Angle();
-        printf("x = %d angle: %3.2f\n", x, getMFC_Angle());
 
-        if (x > 0 ) drive(-60, 60); else drive(60, -60);
     }
+    if (isCalibrated) onBoardLedOn();
 
-    drive(0, 0);
+    impulsCntL = impulsCntR = 0;
+    watch = 2000;   // Timeout for calibrate
+    drive(-200, 200);
+    while(watch);
+    correctionRL = (impulsCntL - impulsCntR) / 100. ; // diff on speed 200  
+    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
 
+    impulsCntL = impulsCntR = 0;
+    watch = 2000;   // Timeout for calibrate
+    driveC(-100, 100);
+    while(watch);
+    correctionRL += (impulsCntL - impulsCntR) / 2000. ; // diff on speed 100
+    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
 
+    speedMin = (int) (speedMin * 0.7);  // Reifen sind aufgewärmt .. :-)
 
-    onBoardLedOff(); // funktioniert noch nicht richtig! ....
+    printf("new speedMin: %d\n", speedMin); 
+    
+    driveC(+speedMin, -speedMin);
+    watch = 10000;
+
+    while (watch)
+    {
+        angle = (int) getMFC_Angle();
+        if ((angle < 3.0 ) && (angle > -3.0)) watch = 0;
+
+        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f, watch %d\n",
+            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle, watch);
+
+    }
+    drive(0,0); 
+
 }
 
 void loop() 
-{
+{       
+/*    if(!watch)
+    {
+        angle = (int) getMFC_Angle();
 
+        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f\n",
+            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle);
+        watch = 500;    
+    }       
+*/
 }
 
 /*****************************************************************/
@@ -224,18 +266,25 @@ int initMFC(void)
   return Wire.endTransmission();
 }
 
+void preppareMfsCalibrationSystem(void)
+{
+    xMin = yMin = 32767;
+    xMax = yMax = -32768;
+}
+
+
 void readRawMFC(int16_t* x, int16_t* y, int16_t* z)
 {
     Wire.beginTransmission(MFS);
     Wire.write(0x03);
     Wire.endTransmission(false); 
 
-    Wire.requestFrom(MFS, 6); //delay(100);
+    Wire.requestFrom(MFS, 6); 
     if (Wire.available() == 6) 
     {
-        *x = Wire.read() << 8; *x |= Wire.read(); //delay(10);
-        *z = Wire.read() << 8; *z |= Wire.read(); //delay(10);
-        *y = Wire.read() << 8; *y |= Wire.read(); //delay(10);
+        *x = Wire.read() << 8; *x |= Wire.read(); 
+        *z = Wire.read() << 8; *z |= Wire.read(); 
+        *y = Wire.read() << 8; *y |= Wire.read(); 
     } 
 }
 
@@ -256,11 +305,11 @@ int calibrateMFC(void)
     if (y > yMax) { yMax = y; }
     if (y < yMin) { yMin = y; }    
 
-    if ( ((xMax -xMin) > 200) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; 
+    if ( ((xMax -xMin) > 180) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; 
 
 
-    printf("|| x: %04d  %04d ||  y: %04d  %04d|| ret: %d angle: %3.2f\n",
-            x, (xMax - xMin), y, (yMax - yMin), ret, getMFC_Angle());
+    printf("|| x: %04d  %04d  xmin: %04d xmax: %04d ||  y: %04d  %04d ymin %04d ymax %04d || L: %04d R: %04d || ret: %d angle: %3.2f\n",
+            x, (xMax - xMin), xMin, xMax, y, (yMax - yMin), yMin, yMax, impulsCntL, impulsCntR, ret, getMFC_Angle());
 
 
     return ret;
@@ -268,16 +317,15 @@ int calibrateMFC(void)
 
 float getMFC_Angle()
 {
-    int16_t x_raw, y_raw, z_raw;
-    float x, y, angle;
+    float xw, yw, angle;
 
-    readRawMFC(&x_raw, &y_raw, &z_raw);
+    readRawMFC(&x, &y, &z);
 
     if ((xMax != xMin) && (yMax != yMin))  // avoid div by zero
     {
-        x = 2.0 * (x_raw - xMin) / (xMax - xMin) - 1.0;
-        y = 2.0 * (y_raw - yMin) / (yMax - yMin) - 1.0;
-        angle = atan2(-y, x) * 180.0 / M_PI;
+        xw = 2.0 * (x - xMin) / (xMax - xMin) - 1.0;
+        yw = 2.0 * (y - yMin) / (yMax - yMin) - 1.0;
+        angle = atan2(-yw, xw) * 180.0 / M_PI;
     }
     else 
     {
@@ -362,6 +410,17 @@ void drive(int left, int right)
     vR = right;
 }
 
+void driveC(int l, int r)
+{
+    int lc, rc;
+    lc = (int)((l) * (1 - correctionRL));
+    rc = (int)(r * (1 + correctionRL));
+     drive(lc , rc);
+     printf("driveC lc: %03d rc %03d\n", lc, rc);
+}
+
+
+
 void rototateByCompass(int degree)
 {
 
@@ -388,11 +447,13 @@ void onBoardLedOff(void)
 void impuls_R_isr(void)
 {
     digitalWrite(TEST_PIN_RX2, LOW);
+    impulsCntR++;
 }
 
 void impuls_L_isr(void)
 {
     digitalWrite(TEST_PIN_RX2, HIGH);
+    impulsCntL++;
 }
 /******************************************************************
 
