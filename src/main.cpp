@@ -73,6 +73,7 @@ const uint8_t impulsR = 27;
 float angle;
 int speed, diff;
 int speedMin;
+float distance;
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 char text[20];
 
@@ -110,22 +111,15 @@ void setup()
     pinMode(WHEEL_L_DIRECTION, OUTPUT);
     pinMode(WHEEL_R_DIRECTION, OUTPUT);
     pinMode(BATTERY_LEVEL, INPUT);
-   
+    pinMode(ECHO_PIN, INPUT_PULLUP);  
+    pinMode(TRIG_PIN, OUTPUT);
+    
     pinMode(TEST_PIN_RX2, OUTPUT);
     
 
     /*
-    pinMode(TRIG_PIN, OUTPUT);
-    pinMode(ECHO_PIN, INPUT_PULLUP);  // ? PULLUP? vielleicht nicht nötig... 
     
-        digitalWrite(TRIG_PIN, LOW);
-        delay(5);
-        digitalWrite(TRIG_PIN, HIGH);
-        delay(5);
-        digitalWrite(TRIG_PIN, LOW);
-
-        distance = pulseIn(ECHO_PIN, HIGH);   // durch 58.23 
- if ((int)(distance/58.23) < 12)
+    
         {
             leds[2] = CRGB{255, 0, 255};
             leds[3] = CRGB{255, 0, 255};
@@ -186,14 +180,11 @@ void setup()
     oled.setTextSize(2);
     oled.setTextColor(WHITE);
     oled.setCursor(0, 0);
-    oled.print("start!");
+    oled.print("calibrate");
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
     // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     // oled.drawCircle(64, 32, 31, WHITE);
     oled.display();
-
-
-    printData();
 
     // scanI2CBus();  for tests
 
@@ -263,19 +254,20 @@ void setup()
 
 void loop() 
 {       
-/*    if(!watch)
-    {
-        angle = (int) getMFC_Angle();
 
-        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f\n",
-            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle);
-        watch = 500;    
-    }       
-*/
+    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
+    angle = (int) getMFC_Angle();
+
+    digitalWrite(TRIG_PIN, LOW);
+    delay(5);
+    digitalWrite(TRIG_PIN, HIGH);
+    delay(5);
+    digitalWrite(TRIG_PIN, LOW);
+    distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
+ 
     printData();
 
     watch = 1000; while(watch);
-
 }
 
 /*****************************************************************/
@@ -378,10 +370,8 @@ float getMFC_Angle()
 
 void printData(void)
 {
-    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
-    angle = (int) getMFC_Angle();
 
-    oled.fillRect(0, 15, 120, 40, 0); // clear!
+    oled.fillRect(0, 0, 128, 64, 0); // clear all!
 
     sprintf(text,"b: 0.00 V");
     text[3] = (int)(batteryLevel) %10 + '0';
@@ -393,14 +383,25 @@ void printData(void)
 
   
 
-    sprintf(text,"w:       ", angle);
+    sprintf(text,"w:       ");
     text[2] = (angle >= 0) ? '+' : '-';
-    text[3] = (int)(angle/100) % 10 + '0';
-    text[4] = (int)(angle/10)  % 10 + '0';
-    text[5] = (int)(angle)    % 10 + '0';
-    text[6] = '.';
-    text[7] = (int)(angle*10) % 10 + '0';
+    text[4] = (int)(angle/100) % 10 + '0';
+    text[5] = (int)(angle/10)  % 10 + '0';
+    text[6] = (int)(angle)    % 10 + '0';
+    text[7] = '.';
+    text[8] = (int)(angle*10) % 10 + '0';
     oled.setCursor(20, 32);
+    oled.print(text);
+
+    sprintf(text,"d:       ");
+    if (distance >= 100.) text[2] = (int)(distance/100) % 10 + '0'; else text[2] = ' ';
+    if (distance >= 10.)  text[3] = (int)(distance/10)  % 10 + '0'; else text[3] = ' ';
+    text[4] = (int)(distance)    % 10 + '0';
+    text[5] = '.';
+    text[6] = (int)(distance*10) % 10 + '0';
+    text[7] = 'c';
+    text[8] = 'm';
+    oled.setCursor(20, 48);
     oled.print(text);
 
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
