@@ -8,6 +8,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 #define TRUE                            true
 #define FALSE                           false
@@ -18,11 +20,11 @@
 #define WAIT_250_MSEC                   2500
 #define WAIT_10_MSEC                    100 
 
-#define ON_BOARD_LED                    5         // LoLin32 
-#define BATTERY_LEVEL                   A3        // GPIO 39
-#define REFV                            685.0     // factor
+#define ON_BOARD_LED                    5                  // LoLin32 
+#define BATTERY_LEVEL                   A3                 // GPIO 39
+#define REFV                            685.0              // factor
 
-#define MFS                             0x1e      // magnetic field sensor
+#define MFS                             0x1e               // magnetic field sensor
 
 #define WHEEL_L                         2
 #define WHEEL_R                         A4
@@ -38,6 +40,10 @@
 #define TRIG_PIN                        25  
 #define ECHO_PIN                        26
 #define TEST_PIN_RX2                    16
+
+#define SCREEN_WIDTH                    128                // OLED display width, in pixels
+#define SCREEN_HEIGHT                   64                 // OLED display height, in pixels
+#define OLED                            0x3c
 
 hw_timer_t *timer = NULL;
 void IRAM_ATTR myTimer(void);
@@ -67,6 +73,8 @@ const uint8_t impulsR = 27;
 float angle;
 int speed, diff;
 int speedMin;
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
+char text[20];
 
 void preSet(void);
 void store2EEPROM(String word, int address);
@@ -89,6 +97,7 @@ void impuls_R_isr(void);
 void impuls_L_isr(void);
 
 void scanI2CBus();   // for tests
+void printData(void);
 
 
 void setup() 
@@ -169,6 +178,23 @@ void setup()
     printf("password: %s\n", password);
     printf("magneticfield-sesor: %d\n", initMFC());
 
+
+
+    
+    oled.begin(SSD1306_SWITCHCAPVCC, OLED);
+    oled.clearDisplay();
+    oled.setTextSize(2);
+    oled.setTextColor(WHITE);
+    oled.setCursor(0, 0);
+    oled.print("start!");
+    // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
+    // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+    // oled.drawCircle(64, 32, 31, WHITE);
+    oled.display();
+
+
+    printData();
+
     // scanI2CBus();  for tests
 
     //  rotate for 360° - calibrate mfs-system and count impulses : 
@@ -246,6 +272,10 @@ void loop()
         watch = 500;    
     }       
 */
+    printData();
+
+    watch = 1000; while(watch);
+
 }
 
 /*****************************************************************/
@@ -341,6 +371,42 @@ float getMFC_Angle()
     // North = +-180°
 
     return angle;  
+}
+
+/*****************************************************************/
+// OLED DISPLAY:
+
+void printData(void)
+{
+    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
+    angle = (int) getMFC_Angle();
+
+    oled.fillRect(0, 15, 120, 40, 0); // clear!
+
+    sprintf(text,"b: 0.00 V");
+    text[3] = (int)(batteryLevel) %10 + '0';
+    text[4] = '.';
+    text[5] = (int)(batteryLevel * 10 ) %10 + '0';
+    text[6] = (int)(batteryLevel * 100) %10 + '0';
+    oled.setCursor(20, 16);
+    oled.print(text);
+
+  
+
+    sprintf(text,"w:       ", angle);
+    text[2] = (angle >= 0) ? '+' : '-';
+    text[3] = (int)(angle/100) % 10 + '0';
+    text[4] = (int)(angle/10)  % 10 + '0';
+    text[5] = (int)(angle)    % 10 + '0';
+    text[6] = '.';
+    text[7] = (int)(angle*10) % 10 + '0';
+    oled.setCursor(20, 32);
+    oled.print(text);
+
+    // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
+    // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+    // oled.drawCircle(64, 32, 31, WHITE);
+    oled.display();
 }
 
 
