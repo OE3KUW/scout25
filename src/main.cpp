@@ -70,7 +70,7 @@ int mfcInitialized = FALSE;
 int isCalibrated = FALSE;
 const uint8_t impulsL = 14;
 const uint8_t impulsR = 27;
-float angle;
+float angle = 0;
 int speed, diff;
 int speedMin;
 float distance;
@@ -193,7 +193,7 @@ void setup()
     // zuerst beginne ganz langsam und finde die kleinste Gschwindigkeit, bei der sich beide Motoren drehen. 
 
     speed = 0; 
-    drive(0,0);
+        drive(0,0);
     impulsCntL = impulsCntR = 0;
     preppareMfsCalibrationSystem();
     
@@ -370,7 +370,7 @@ float getMFC_Angle()
 
 void printData(void)
 {
-
+    int angleInt = 0;
     oled.fillRect(0, 0, 128, 64, 0); // clear all!
 
     sprintf(text,"b: 0.00 V");
@@ -384,12 +384,14 @@ void printData(void)
   
 
     sprintf(text,"w:       ");
-    text[2] = (angle >= 0) ? '+' : '-';
-    text[4] = (int)(angle/100) % 10 + '0';
-    text[5] = (int)(angle/10)  % 10 + '0';
-    text[6] = (int)(angle)    % 10 + '0';
+
+    if (angle >= 0) { text[2] = '+'; angleInt = (int)angle;} else { text[2] = '-'; angleInt = (int)(-angle); }
+    
+    if (angleInt >= 100) text[4] = (int)(angleInt/100) % 10 + '0';
+    if (angleInt >= 10)  text[5] = (int)(angleInt/10)  % 10 + '0';
+    text[6] = (int)(angleInt)    % 10 + '0';
     text[7] = '.';
-    text[8] = (int)(angle*10) % 10 + '0';
+    text[8] = (int)(angleInt*10) % 10 + '0';
     oled.setCursor(20, 32);
     oled.print(text);
 
