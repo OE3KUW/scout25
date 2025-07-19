@@ -70,7 +70,7 @@ int mfcInitialized = FALSE;
 int isCalibrated = FALSE;
 const uint8_t impulsL = 14;
 const uint8_t impulsR = 27;
-float angle = 0;
+float angle = 0.;
 int speed, diff;
 int speedMin;
 float distance;
@@ -256,7 +256,7 @@ void loop()
 {       
 
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
-    angle = (int) getMFC_Angle();
+    angle = getMFC_Angle();
 
     digitalWrite(TRIG_PIN, LOW);
     delay(5);
@@ -385,13 +385,13 @@ void printData(void)
 
     sprintf(text,"w:       ");
 
-    if (angle >= 0) { text[2] = '+'; angleInt = (int)angle;} else { text[2] = '-'; angleInt = (int)(-angle); }
+    if (angle >= 0) { text[2] = '+'; angleInt = (int)(angle*10.);} else { text[2] = '-'; angleInt = (int)(angle*-10.); }
     
-    if (angleInt >= 100) text[4] = (int)(angleInt/100) % 10 + '0';
-    if (angleInt >= 10)  text[5] = (int)(angleInt/10)  % 10 + '0';
-    text[6] = (int)(angleInt)    % 10 + '0';
+    if (angleInt >= 1000) text[4] = (int)(angleInt/1000) % 10 + '0';
+    if (angleInt >= 100)  text[5] = (int)(angleInt/100)  % 10 + '0';
+    text[6] = (int)(angleInt/10)                         % 10 + '0';
     text[7] = '.';
-    text[8] = (int)(angleInt*10) % 10 + '0';
+    text[8] = (int)(angleInt)                            % 10 + '0';
     oled.setCursor(20, 32);
     oled.print(text);
 
