@@ -10,6 +10,9 @@
 #include <EEPROM.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <PS4Controller.h>
+//#define FASTLED_ALL_PINS_HARDWARE_SPI
+//#include <FastLED.h>
 
 #define TRUE                            true
 #define FALSE                           false
@@ -72,10 +75,14 @@ const uint8_t impulsL = 14;
 const uint8_t impulsR = 27;
 float angle = 0.;
 int speed, diff;
+int speedL, speedR; 
 int speedMin;
 float distance;
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 char text[20];
+
+
+//#CRGB leds[NUM_LEDS];
 
 void preSet(void);
 void store2EEPROM(String word, int address);
@@ -99,6 +106,8 @@ void impuls_L_isr(void);
 
 void scanI2CBus();   // for tests
 void printData(void);
+void printImpulse(void);
+
 
 
 void setup() 
@@ -115,23 +124,7 @@ void setup()
     pinMode(TRIG_PIN, OUTPUT);
     
     pinMode(TEST_PIN_RX2, OUTPUT);
-    
-
-    /*
-    
-    
-        {
-            leds[2] = CRGB{255, 0, 255};
-            leds[3] = CRGB{255, 0, 255};
-        }
-        else
-        {
-            leds[2] = CRGB{255, 255, 255};
-            leds[3] = CRGB{255, 255, 255};
-        }
-
-
-        */
+   
     
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("EEPROM initialisieren fehlgeschlagen!");
@@ -150,9 +143,9 @@ void setup()
     qSecFlag = FALSE;
     tenMSecFlag = FALSE; 
 
-    sei(); // start all interrupts!  especially printf need this ... 
+    sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
-    // preSet(); // store setup to EEPROM
+    // preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
     
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
@@ -160,9 +153,8 @@ void setup()
     ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
     password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
 
-    Wire.begin(21, 22);
+    Wire.begin(21, 22); // i2c wird hier vorbereitet
     
-
     
     printf("\n______________________________________________________________________________________\n");
     printf("start!\n");
@@ -172,83 +164,52 @@ void setup()
     printf("password: %s\n", password);
     printf("magneticfield-sesor: %d\n", initMFC());
 
-
-
     
     oled.begin(SSD1306_SWITCHCAPVCC, OLED);
     oled.clearDisplay();
     oled.setTextSize(2);
     oled.setTextColor(WHITE);
     oled.setCursor(0, 0);
-    oled.print("calibrate");
+    oled.print("*** cali ***");
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
     // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     // oled.drawCircle(64, 32, 31, WHITE);
     oled.display();
 
-    // scanI2CBus();  for tests
+    // scanI2CBus();  for tests  um herauszufinden welch devices vorhanden sind
+
 
     //  rotate for 360° - calibrate mfs-system and count impulses : 
+    // das System soll sich für 3 Sekunden um die eigene Achse drehen. 
+    // dabei soll Calibriert werden und es sollen die Impulse gezählt werden. 
 
-    // zuerst beginne ganz langsam und finde die kleinste Gschwindigkeit, bei der sich beide Motoren drehen. 
-
-    speed = 0; 
-        drive(0,0);
+    drive(0,0);
     impulsCntL = impulsCntR = 0;
     preppareMfsCalibrationSystem();
-    
-    while ((impulsCntL < 10) && (impulsCntR < 10))
-    {
-        drive(speed, -speed);
-        watch = 100; while(watch);
-        speed += 5;
-        calibrateMFC();
-    }
-    speedMin = speed;
-    printf("speedMin: %d\n", speedMin);
 
+    watch = 3000;
+    oled.setCursor(0, 20);
+    onBoardLedOn();
 
-    watch = 5000;   // Timeout for calibrate
-    onBoardLedOff();
-    drive(speedMin, -speedMin);
- 
-    while ((calibrateMFC() != TRUE) && watch);
-    {
-
-    }
-    if (isCalibrated) onBoardLedOn();
-
-    impulsCntL = impulsCntR = 0;
-    watch = 2000;   // Timeout for calibrate
-    drive(-200, 200);
-    while(watch);
-    correctionRL = (impulsCntL - impulsCntR) / 100. ; // diff on speed 200  
-    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
-
-    impulsCntL = impulsCntR = 0;
-    watch = 2000;   // Timeout for calibrate
-    driveC(-100, 100);
-    while(watch);
-    correctionRL += (impulsCntL - impulsCntR) / 2000. ; // diff on speed 100
-    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
-
-    speedMin = (int) (speedMin * 0.7);  // Reifen sind aufgewärmt .. :-)
-
-    printf("new speedMin: %d\n", speedMin); 
-    
-    driveC(+speedMin, -speedMin);
-    watch = 10000;
+    drive( -200, 200); // dreh dich
 
     while (watch)
     {
-        angle = (int) getMFC_Angle();
-        if ((angle < 3.0 ) && (angle > -3.0)) watch = 0;
-
-        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f, watch %d\n",
-            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle, watch);
-
+        calibrateMFC();
+        printImpulse();
     }
+
     drive(0,0); 
+
+    onBoardLedOff();
+    watch = 3000; while (watch); // drei Sekunden zum Ablesen der Impulswerte! 
+    PS4.begin("10:20:30:40:50:62");  // gleichzeitig wird der PS Controller initialisiert
+
+    // hier könnte man die ImpulsCounterWerte links und rechts speichern um dann damit die beiden Motoren unterschiedlich anzusprechen.
+    // .... 
+
+
+
 
 }
 
@@ -257,6 +218,20 @@ void loop()
 
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
     angle = getMFC_Angle();
+
+
+    if(PS4.isConnected())
+    {
+        onBoardLedOn();
+
+        if(PS4.L1()) { speedL = PS4.L2Value(); } else {speedL = -PS4.L2Value();}
+        if(PS4.R1()) { speedR = PS4.R2Value(); } else {speedR = -PS4.R2Value();}
+
+        drive(speedL, speedR); 
+    }
+    else drive(0,0);
+
+
 
     digitalWrite(TRIG_PIN, LOW);
     delay(5);
@@ -365,6 +340,8 @@ float getMFC_Angle()
     return angle;  
 }
 
+
+
 /*****************************************************************/
 // OLED DISPLAY:
 
@@ -380,8 +357,6 @@ void printData(void)
     text[6] = (int)(batteryLevel * 100) %10 + '0';
     oled.setCursor(20, 16);
     oled.print(text);
-
-  
 
     sprintf(text,"w:       ");
 
@@ -411,6 +386,30 @@ void printData(void)
     // oled.drawCircle(64, 32, 31, WHITE);
     oled.display();
 }
+
+void printImpulse(void)
+{
+    oled.fillRect(0, 10, 128, 64, 0); // clear rect 
+
+    sprintf(text,"iL: 000 ");
+    text[4] = (int)(impulsCntL/100) %10 + '0';
+    text[5] = (int)(impulsCntL/10 ) %10 + '0';
+    text[6] = (int)(impulsCntL   ) %10 + '0';
+
+    oled.setCursor(20, 16);
+    oled.print(text);
+
+    sprintf(text,"iR: 000 ");
+    text[4] = (int)(impulsCntR/100) %10 + '0';
+    text[5] = (int)(impulsCntR/10 ) %10 + '0';
+    text[6] = (int)(impulsCntR    ) %10 + '0';
+
+    oled.setCursor(20, 32);
+    oled.print(text);
+
+    oled.display();
+}
+
 
 
 /*****************************************************************/
@@ -651,3 +650,68 @@ Serial.println(id);
 
 */ 
 
+
+
+/*
+    // zuerst beginne ganz langsam und finde die kleinste Gschwindigkeit, bei der sich beide Motoren drehen. 
+
+    speed = 0; 
+        drive(0,0);
+    impulsCntL = impulsCntR = 0;
+    preppareMfsCalibrationSystem();
+    
+    while ((impulsCntL < 10) && (impulsCntR < 10))
+    {
+        drive(speed, -speed);
+        watch = 100; while(watch);
+        speed += 5;
+        calibrateMFC();
+    }
+    speedMin = speed;
+    printf("speedMin: %d\n", speedMin);
+
+
+    watch = 5000;   // Timeout for calibrate
+    onBoardLedOff();
+    drive(speedMin, -speedMin);
+ 
+    while ((calibrateMFC() != TRUE) && watch);
+    {
+
+    }
+    if (isCalibrated) onBoardLedOn();
+
+    impulsCntL = impulsCntR = 0;
+    watch = 2000;   // Timeout for calibrate
+    drive(-200, 200);
+    while(watch);
+    correctionRL = (impulsCntL - impulsCntR) / 100. ; // diff on speed 200  
+    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
+
+    impulsCntL = impulsCntR = 0;
+    watch = 2000;   // Timeout for calibrate
+    driveC(-100, 100);
+    while(watch);
+    correctionRL += (impulsCntL - impulsCntR) / 2000. ; // diff on speed 100
+    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
+
+    speedMin = (int) (speedMin * 0.7);  // Reifen sind aufgewärmt .. :-)
+
+    printf("new speedMin: %d\n", speedMin); 
+    
+    driveC(+speedMin, -speedMin);
+    watch = 10000;
+
+    while (watch)
+    {
+        angle = (int) getMFC_Angle();
+        if ((angle < 3.0 ) && (angle > -3.0)) watch = 0;
+
+        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f, watch %d\n",
+            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle, watch);
+
+    }
+    drive(0,0); 
+
+
+*/
