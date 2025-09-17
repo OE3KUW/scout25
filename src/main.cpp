@@ -76,6 +76,8 @@ const uint8_t impulsR = 27;
 float angle = 0.;
 int speed, diff;
 int speedL, speedR; 
+int dirL = 1, dirR = 1;
+int connected = FALSE;
 int speedMin;
 float distance;
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
@@ -197,6 +199,8 @@ void setup()
     {
         calibrateMFC();
         printImpulse();
+
+      
     }
 
     drive(0,0); 
@@ -220,29 +224,51 @@ void loop()
     angle = getMFC_Angle();
 
 
-    if(PS4.isConnected())
+    if (tenMSecFlag)
     {
-        onBoardLedOn();
+        tenMSecFlag = FALSE;
+    
+        if (connected)
+        {
+            if(PS4.L1()) { dirL = -dirL; }
+            if(PS4.R1()) { dirR = -dirR; }
+                
+            speedL = PS4.L2Value(); 
 
-        if(PS4.L1()) { speedL = PS4.L2Value(); } else {speedL = -PS4.L2Value();}
-        if(PS4.R1()) { speedR = PS4.R2Value(); } else {speedR = -PS4.R2Value();}
+            speedR = PS4.R2Value(); 
 
-        drive(speedL, speedR); 
+            speedL = (dirL == 1) ? speedL: -speedL;
+            speedR = (dirR == 1) ? speedR: -speedR;
+
+            drive(speedL, speedR); 
+        }
+        else
+        {  
+            if(PS4.isConnected())
+            {
+               onBoardLedOn();
+               connected = TRUE;
+            }
+        }
     }
-    else drive(0,0);
+        
+   
+    if (qSecFlag)
+    {
+        qSecFlag = FALSE;
+   
 
-
-
-    digitalWrite(TRIG_PIN, LOW);
-    delay(5);
-    digitalWrite(TRIG_PIN, HIGH);
-    delay(5);
-    digitalWrite(TRIG_PIN, LOW);
-    distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
+        digitalWrite(TRIG_PIN, LOW);
+        delay(5);
+        digitalWrite(TRIG_PIN, HIGH);
+        delay(5);
+        digitalWrite(TRIG_PIN, LOW);
+        distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
  
-    printData();
+        printData();
+    }
 
-    watch = 1000; while(watch);
+    //watch = 1000; while(watch);
 }
 
 /*****************************************************************/
