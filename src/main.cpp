@@ -4,15 +4,50 @@
 
                                                    қuran july 2025
 ******************************************************************/
+/*
+#include <Arduino.h>
+#include <BluetoothSerial.h>
+
+BluetoothSerial BT;
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  // Optional: feste PIN, hilft auf manchen Android-Geräten
+  // BT.setPin("1234");
+
+  if (!BT.begin("scout25!")) {
+    Serial.println("BT start FAIL");
+    while (1) delay(1000);
+  }
+  Serial.println("BT start OK, name= scout25");
+}
+
+void loop() {
+  // Echo
+  while (BT.available()) {
+    int c = BT.read();
+    BT.write((uint8_t)c);
+    Serial.write((uint8_t)c);
+  }
+  delay(1);
+}
+
+
+*/
+//--------------------------------------------------------------
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
+#define FASTLED_ALL_PINS_HARDWARE_SPI
+#include <FastLED.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <PS4Controller.h>
-//#define FASTLED_ALL_PINS_HARDWARE_SPI
-//#include <FastLED.h>
+#include <BluetoothSerial.h>
+
 
 #define TRUE                            true
 #define FALSE                           false
@@ -48,6 +83,11 @@
 #define SCREEN_HEIGHT                   64                 // OLED display height, in pixels
 #define OLED                            0x3c
 
+#define NUM_LEDS                        4
+#define DATA_PIN                        23
+#define CLOCK_PIN                       18
+
+
 hw_timer_t *timer = NULL;
 void IRAM_ATTR myTimer(void);
 volatile int watch = 0; 
@@ -55,9 +95,14 @@ volatile int oneSecFlag;
 volatile int qSecFlag;
 volatile int tenMSecFlag;
 
+BluetoothSerial BT;  // SPP „Serial Port Profile“
+static const char* BT_NAME = "scout25NEW";
 
 volatile int vL, vR, LDir, RDir;
-volatile int impulsCntL, impulsCntR;
+volatile int impulsCntL;
+volatile int impulsCntR;
+volatile int impulsFlagL;
+volatile int impulsFlagR;
 float correctionRL; 
 
 volatile float batteryLevel = 0.;
@@ -82,9 +127,10 @@ int speedMin;
 float distance;
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 char text[20];
+volatile static unsigned char ramp = 0;
 
 
-//#CRGB leds[NUM_LEDS];
+CRGB leds[NUM_LEDS];
 
 void preSet(void);
 void store2EEPROM(String word, int address);
@@ -135,7 +181,7 @@ void setup()
 
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
-    timerAlarmWrite(timer, 100, true);  // 0.1 msec
+    timerAlarmWrite(timer, 100, true);  // 0.1 msec -> 100
     timerAlarmEnable(timer);
 
     attachInterrupt(digitalPinToInterrupt(impulsR), impuls_R_isr, FALLING);
@@ -143,12 +189,32 @@ void setup()
     
     oneSecFlag = FALSE; 
     qSecFlag = FALSE;
-    tenMSecFlag = FALSE; 
+    tenMSecFlag = FALSE;
+    impulsFlagL = FALSE;  
+    impulsFlagR = FALSE;  
+
+    if (!BT.begin(BT_NAME)) 
+    {
+        printf("Fehler beim Start von Bluetooth!\n");
+    }
+    else
+    {
+        printf("BT scout25 gestartet\n");
+    }
+    // muss noch vor sei durchgefhrt werden!
+
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
-    // preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
+
+    watch = 100; while (watch); // 100 ms wait time
+
+    preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
+
+  
     
+
+
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
     motorSys = (char)motorSysFromEEPROM[0] - '0';
@@ -172,7 +238,7 @@ void setup()
     oled.setTextSize(2);
     oled.setTextColor(WHITE);
     oled.setCursor(0, 0);
-    oled.print("*** cali ***");
+    oled.print("calibrate:");
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
     // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     // oled.drawCircle(64, 32, 31, WHITE);
@@ -193,19 +259,29 @@ void setup()
     oled.setCursor(0, 20);
     onBoardLedOn();
 
-    drive( -200, 200); // dreh dich
+    FastLED.addLeds<SK9822, DATA_PIN, CLOCK_PIN, RGB>(leds, NUM_LEDS);
+
+    leds[0] = CRGB{0, 0, 0}; // R B G
+    leds[1] = CRGB{0, 0, 0};
+    leds[2] = CRGB{0, 0, 0};
+    leds[3] = CRGB{0, 0, 0};
+
+    FastLED.show();
+
+
+// --- derzeit kein Drehen!    drive( -250, 250); // dreh dich  --- nur calibrieren!
 
     while (watch)
     {
         calibrateMFC();
         printImpulse();
-
-      
     }
-
+    
     drive(0,0); 
 
     onBoardLedOff();
+
+
     watch = 3000; while (watch); // drei Sekunden zum Ablesen der Impulswerte! 
     PS4.begin("10:20:30:40:50:62");  // gleichzeitig wird der PS Controller initialisiert
 
@@ -219,7 +295,8 @@ void setup()
 
 void loop() 
 {       
-
+static char flon = FALSE;
+int c; 
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
     angle = getMFC_Angle();
 
@@ -227,6 +304,13 @@ void loop()
     if (tenMSecFlag)
     {
         tenMSecFlag = FALSE;
+
+        while (BT.available()) 
+        {
+            c = BT.read();
+            BT.write((uint8_t)c);
+            Serial.write((uint8_t)c);
+        }
     
         if (connected)
         {
@@ -241,6 +325,29 @@ void loop()
             speedR = (dirR == 1) ? speedR: -speedR;
 
             drive(speedL, speedR); 
+
+            if(PS4.Triangle())
+            {
+                flon = (flon) ? FALSE : TRUE;
+
+            }
+            if (flon)
+            { 
+                   leds[0] = CRGB{0, 0, 255}; // R B G
+                   leds[1] = CRGB{0, 255, 255};
+                   leds[2] = CRGB{255, 0, 255};
+                   leds[3] = CRGB{255, 255, 0};
+                   FastLED.show();
+            }
+            else
+            { 
+                   leds[0] = CRGB{0, 0, 0}; // R B G
+                   leds[1] = CRGB{0, 0, 0};
+                   leds[2] = CRGB{0, 0, 0};
+                   leds[3] = CRGB{0, 0, 0};
+                   FastLED.show();
+            }
+
         }
         else
         {  
@@ -248,6 +355,13 @@ void loop()
             {
                onBoardLedOn();
                connected = TRUE;
+
+                   leds[0] = CRGB{0, 0, 255}; // R B G
+                   leds[1] = CRGB{0, 255, 255};
+                   leds[2] = CRGB{255, 0, 255};
+                   leds[3] = CRGB{255, 255, 0};
+                   FastLED.show();
+
             }
         }
     }
@@ -271,7 +385,7 @@ void loop()
     //watch = 1000; while(watch);
 }
 
-/*****************************************************************/
+
 // Magnetic field sensor:
 
 int initMFC(void)
@@ -368,7 +482,6 @@ float getMFC_Angle()
 
 
 
-/*****************************************************************/
 // OLED DISPLAY:
 
 void printData(void)
@@ -415,14 +528,14 @@ void printData(void)
 
 void printImpulse(void)
 {
-    oled.fillRect(0, 10, 128, 64, 0); // clear rect 
+    oled.fillRect(0, 17, 128, 64, 0); // clear rect 
 
     sprintf(text,"iL: 000 ");
     text[4] = (int)(impulsCntL/100) %10 + '0';
     text[5] = (int)(impulsCntL/10 ) %10 + '0';
     text[6] = (int)(impulsCntL   ) %10 + '0';
 
-    oled.setCursor(20, 16);
+    oled.setCursor(20, 20);
     oled.print(text);
 
     sprintf(text,"iR: 000 ");
@@ -430,7 +543,7 @@ void printImpulse(void)
     text[5] = (int)(impulsCntR/10 ) %10 + '0';
     text[6] = (int)(impulsCntR    ) %10 + '0';
 
-    oled.setCursor(20, 32);
+    oled.setCursor(20, 40);
     oled.print(text);
 
     oled.display();
@@ -438,7 +551,6 @@ void printImpulse(void)
 
 
 
-/*****************************************************************/
 // EEPROM:
 
 void store2EEPROM(String word, int address)
@@ -489,7 +601,6 @@ void scanI2CBus()  // for checks
 
 
 
-/*****************************************************************/
 //  driving system:
 
 void drive(int left, int right)
@@ -520,7 +631,6 @@ void rototateByCompass(int degree)
 
 }
 
-/*****************************************************************/
 // lights:
 
 void onBoardLedOn(void)
@@ -534,38 +644,40 @@ void onBoardLedOff(void)
 }
 
 
-/******************************************************************
-
-/******************************************************************/
-
-void impuls_R_isr(void)
-{
-    digitalWrite(TEST_PIN_RX2, LOW);
-    impulsCntR++;
-}
 
 void impuls_L_isr(void)
 {
-    digitalWrite(TEST_PIN_RX2, HIGH);
-    impulsCntL++;
+    impulsFlagL = TRUE; 
 }
-/******************************************************************
 
-              T i m e r   I n t e r r u  p t : 
 
-/******************************************************************/
+void impuls_R_isr(void)
+{
+    //digitalWrite(TEST_PIN_RX2, LOW);
+    impulsFlagR = TRUE; 
+}
+
+
+//******************************************************************
+
+//              T i m e r   I n t e r r u  p t : 
+
+//******************************************************************
 
 void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 msec
 {
     static int32_t otick  = 0;
     static int32_t qtick = 0;
     static int32_t mtick = 0;
-    static unsigned char ramp = 0;
     
     otick++;
     qtick++;
     mtick++;
     ramp++;
+
+    if (impulsFlagL) {impulsFlagL = FALSE; impulsCntL++; }
+    if (impulsFlagR) {impulsFlagR = FALSE; impulsCntR++; } 
+
 
     if (otick >= WAIT_ONE_SEC) 
     {
@@ -600,144 +712,6 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
         if (RDir) if (ramp < vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
         else      if (ramp > vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
     }
-}
-
-/******************************************************************
-
-Tests.... 
-
-
-
-  #include <Arduino.h>
-#include <Wire.h>
-
-#define HMC5883L_ADDR 0x1E
-
-void setup() {
-  Serial.begin(115200);
-  Wire.begin(21, 22);  // Standardtakt, saubere Umgebung
-  delay(200);
-
-  Wire.beginTransmission(HMC5883L_ADDR);
-  Wire.write(0x00); Wire.write(0x70); // Konfiguration A
-  Wire.endTransmission();
-
-  Wire.beginTransmission(HMC5883L_ADDR);
-  Wire.write(0x01); Wire.write(0xA0); // Gain höher setzen
-  Wire.endTransmission();
-
-  Wire.beginTransmission(HMC5883L_ADDR);
-  Wire.write(0x02); Wire.write(0x00); // Continuous mode
-  Wire.endTransmission();
 
 }
 
-void loop() {
-  int16_t x, y, z;
-
-  Wire.beginTransmission(HMC5883L_ADDR);
-  Wire.write(0x03);
-  Wire.endTransmission(false); 
-
-  Wire.requestFrom(HMC5883L_ADDR, 6);delay(100);
-  if (Wire.available() == 6) {
-    x = Wire.read() << 8 | Wire.read();delay(10);
-    z = Wire.read() << 8 | Wire.read();delay(10);
-    y = Wire.read() << 8 | Wire.read();delay(10);
-
-    Serial.print("X: "); Serial.print(x);
-    Serial.print(" Y: "); Serial.print(y);
-    Serial.print(" Z: "); Serial.println(z);
-  } else {
-    Serial.println("Fehler beim Lesen");
-  }
-
-  delay(500);
-}
-
-
-// den MFC fragen, wer er ist... 
-char id[4];
-Wire.beginTransmission(0x1E);
-Wire.write(0x0A);
-Wire.endTransmission();
-
-Wire.requestFrom(0x1E, 3);
-id[0] = Wire.read();
-id[1] = Wire.read();
-id[2] = Wire.read();
-id[3] = '\0';
-
-Serial.print("HMC ID: ");
-Serial.println(id);
-
-
-
-
-*/ 
-
-
-
-/*
-    // zuerst beginne ganz langsam und finde die kleinste Gschwindigkeit, bei der sich beide Motoren drehen. 
-
-    speed = 0; 
-        drive(0,0);
-    impulsCntL = impulsCntR = 0;
-    preppareMfsCalibrationSystem();
-    
-    while ((impulsCntL < 10) && (impulsCntR < 10))
-    {
-        drive(speed, -speed);
-        watch = 100; while(watch);
-        speed += 5;
-        calibrateMFC();
-    }
-    speedMin = speed;
-    printf("speedMin: %d\n", speedMin);
-
-
-    watch = 5000;   // Timeout for calibrate
-    onBoardLedOff();
-    drive(speedMin, -speedMin);
- 
-    while ((calibrateMFC() != TRUE) && watch);
-    {
-
-    }
-    if (isCalibrated) onBoardLedOn();
-
-    impulsCntL = impulsCntR = 0;
-    watch = 2000;   // Timeout for calibrate
-    drive(-200, 200);
-    while(watch);
-    correctionRL = (impulsCntL - impulsCntR) / 100. ; // diff on speed 200  
-    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
-
-    impulsCntL = impulsCntR = 0;
-    watch = 2000;   // Timeout for calibrate
-    driveC(-100, 100);
-    while(watch);
-    correctionRL += (impulsCntL - impulsCntR) / 2000. ; // diff on speed 100
-    printf("correction: %1.3f  -> left: %d  right : %d \n", correctionRL, (int)((-100) * (1 - correctionRL)), (int)(+100 * (1 + correctionRL)));
-
-    speedMin = (int) (speedMin * 0.7);  // Reifen sind aufgewärmt .. :-)
-
-    printf("new speedMin: %d\n", speedMin); 
-    
-    driveC(+speedMin, -speedMin);
-    watch = 10000;
-
-    while (watch)
-    {
-        angle = (int) getMFC_Angle();
-        if ((angle < 3.0 ) && (angle > -3.0)) watch = 0;
-
-        printf("|| x: %04d  %04d ||  y: %04d  %04d|| L: %04d R: %04d || ret: %d angle: %3.2f, watch %d\n",
-            x, (xMax - xMin), y, (yMax - yMin), impulsCntL, impulsCntR, isCalibrated, angle, watch);
-
-    }
-    drive(0,0); 
-
-
-*/
