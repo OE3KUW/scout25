@@ -4,39 +4,6 @@
 
                                                    қuran july 2025
 ******************************************************************/
-/*
-#include <Arduino.h>
-#include <BluetoothSerial.h>
-
-BluetoothSerial BT;
-
-void setup() {
-  Serial.begin(115200);
-  delay(200);
-
-  // Optional: feste PIN, hilft auf manchen Android-Geräten
-  // BT.setPin("1234");
-
-  if (!BT.begin("scout25!")) {
-    Serial.println("BT start FAIL");
-    while (1) delay(1000);
-  }
-  Serial.println("BT start OK, name= scout25");
-}
-
-void loop() {
-  // Echo
-  while (BT.available()) {
-    int c = BT.read();
-    BT.write((uint8_t)c);
-    Serial.write((uint8_t)c);
-  }
-  delay(1);
-}
-
-
-*/
-//--------------------------------------------------------------
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -47,7 +14,8 @@ void loop() {
 #include <Adafruit_SSD1306.h>
 #include <PS4Controller.h>
 #include <BluetoothSerial.h>
-
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 #define TRUE                            true
 #define FALSE                           false
@@ -74,10 +42,12 @@ void loop() {
 #define EEPROM_SSID_ADDR                0
 #define EEPROM_PASSWORD_ADDR            40
 #define EEPROM_MOTOR_SYS_ADDR           80
+#define EEPROM_PS4_ADDR                 82
 
 #define TRIG_PIN                        25  
 #define ECHO_PIN                        26
 #define TEST_PIN_RX2                    16
+#define TEST_PIN_TX2                    17
 
 #define SCREEN_WIDTH                    128                // OLED display width, in pixels
 #define SCREEN_HEIGHT                   64                 // OLED display height, in pixels
@@ -86,6 +56,19 @@ void loop() {
 #define NUM_LEDS                        4
 #define DATA_PIN                        23
 #define CLOCK_PIN                       18
+
+#define LDR1                            35 
+#define LDR2                            34 
+#define LDR3                            36 
+#define LDR4                            39 
+
+#define PS4_GREEN                       60
+#define PS4_RED                         61
+#define PS4_BLUE                        62
+
+#define MODE_PS4                        0  
+#define MODE_MENU                       1
+#define MODE_BT                         2
 
 
 hw_timer_t *timer = NULL;
@@ -96,7 +79,7 @@ volatile int qSecFlag;
 volatile int tenMSecFlag;
 
 BluetoothSerial BT;  // SPP „Serial Port Profile“
-static const char* BT_NAME = "scout25NEW";
+static const char* BT_NAME = "scout25";
 
 volatile int vL, vR, LDir, RDir;
 volatile int impulsCntL;
@@ -104,10 +87,14 @@ volatile int impulsCntR;
 volatile int impulsFlagL;
 volatile int impulsFlagR;
 float correctionRL; 
+volatile int countR = 0;
+volatile int prell = 0;
+
 
 volatile float batteryLevel = 0.;
 volatile int motorSys = 0;
 String motorSysFromEEPROM = "";
+String pskey = "";
 String ssidWord = "";
 String password = "";
 
@@ -116,8 +103,8 @@ int yMin = 32767, yMax = -32768;
 int16_t  x, y, z;
 int mfcInitialized = FALSE;
 int isCalibrated = FALSE;
-const uint8_t impulsL = 14;
-const uint8_t impulsR = 27;
+const uint8_t impulsR = 14; // sollten vertauscht werden! 
+const uint8_t impulsL = 27;
 float angle = 0.;
 int speed, diff;
 int speedL, speedR; 
@@ -129,11 +116,16 @@ Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 char text[20];
 volatile static unsigned char ramp = 0;
 
+int mode;
+int ps;
+
 
 CRGB leds[NUM_LEDS];
 
 void preSet(void);
-void store2EEPROM(String word, int address);
+void storeStr2EEPROM(String word, int address);
+void storeVal2EEPROM(int x, int address);
+
 String readFromEEPROM(int address);
 
 void rototateByCompass(int degree); 
@@ -161,7 +153,6 @@ void printImpulse(void);
 void setup() 
 {
     Serial.begin(115200);
-
     pinMode(ON_BOARD_LED, OUTPUT);
     pinMode(WHEEL_L, OUTPUT);
     pinMode(WHEEL_R, OUTPUT);
@@ -170,14 +161,50 @@ void setup()
     pinMode(BATTERY_LEVEL, INPUT);
     pinMode(ECHO_PIN, INPUT_PULLUP);  
     pinMode(TRIG_PIN, OUTPUT);
-    
-    pinMode(TEST_PIN_RX2, OUTPUT);
-   
-    
+    pinMode(TEST_PIN_RX2, INPUT_PULLUP);
+    pinMode(TEST_PIN_TX2, INPUT_PULLUP);
+
+
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // deactiviere die Brownout Detection !!!
+
+    /* restore all eeprom variables: */
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("EEPROM initialisieren fehlgeschlagen!");
         return;
     }
+
+// Werte noch selbst speichern - das komt dann wieder weg! 
+    preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
+
+
+    motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
+    motorSys = (char)motorSysFromEEPROM[0] - '0';
+    ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
+    password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
+    pskey = readFromEEPROM(EEPROM_PS4_ADDR);
+
+    ps = (char) pskey[0]; 
+
+
+
+    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
+
+    Wire.begin(21, 22); // i2c wird hier vorbereitet
+
+    if (digitalRead(TEST_PIN_RX2) == LOW)
+    {
+        mode = MODE_PS4;
+    }
+    else if (digitalRead(TEST_PIN_TX2) == LOW)
+    {
+        mode = MODE_MENU;
+    }
+    else 
+    {
+        mode = MODE_BT;
+    }
+
+    
 
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
@@ -192,46 +219,27 @@ void setup()
     tenMSecFlag = FALSE;
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
+    impulsCntL = impulsCntR = 0;
+ 
+    preppareMfsCalibrationSystem();
+    
+    drive(0, 0);
 
-    if (!BT.begin(BT_NAME)) 
-    {
-        printf("Fehler beim Start von Bluetooth!\n");
-    }
-    else
-    {
-        printf("BT scout25 gestartet\n");
-    }
-    // muss noch vor sei durchgefhrt werden!
-
+    onBoardLedOff();
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
-
     watch = 100; while (watch); // 100 ms wait time
-
-    preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
-
-  
-    
-
-
-    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
-    motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
-    motorSys = (char)motorSysFromEEPROM[0] - '0';
-    ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
-    password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
-
-    Wire.begin(21, 22); // i2c wird hier vorbereitet
-    
     
     printf("\n______________________________________________________________________________________\n");
-    printf("start!\n");
     printf("battery: %1.3f\n", batteryLevel);
     printf("motorSystem: %d\n", motorSys);
     printf("ssid: %s\n", ssidWord);
     printf("password: %s\n", password);
     printf("magneticfield-sesor: %d\n", initMFC());
-
+    printf("ps: %d\n", ps);
+    printf("______________________________________________________________________________________\n");
+    printf("start!\n");
     
     oled.begin(SSD1306_SWITCHCAPVCC, OLED);
     oled.clearDisplay();
@@ -246,19 +254,6 @@ void setup()
 
     // scanI2CBus();  for tests  um herauszufinden welch devices vorhanden sind
 
-
-    //  rotate for 360° - calibrate mfs-system and count impulses : 
-    // das System soll sich für 3 Sekunden um die eigene Achse drehen. 
-    // dabei soll Calibriert werden und es sollen die Impulse gezählt werden. 
-
-    drive(0,0);
-    impulsCntL = impulsCntR = 0;
-    preppareMfsCalibrationSystem();
-
-    watch = 3000;
-    oled.setCursor(0, 20);
-    onBoardLedOn();
-
     FastLED.addLeds<SK9822, DATA_PIN, CLOCK_PIN, RGB>(leds, NUM_LEDS);
 
     leds[0] = CRGB{0, 0, 0}; // R B G
@@ -269,7 +264,43 @@ void setup()
     FastLED.show();
 
 
+    switch (mode)   // Init Phase: 
+    {
+        case MODE_PS4:
+
+            connected = FALSE; 
+
+            switch (ps)
+            {
+                case PS4_GREEN: PS4.begin("10:20:30:40:50:60"); break;
+                case PS4_RED:   PS4.begin("10:20:30:40:50:61"); break;
+                case PS4_BLUE:  PS4.begin("10:20:30:40:50:62"); break;
+            }
+
+        break; 
+
+        case MODE_BT:
+            if (!BT.begin(BT_NAME)) 
+            {
+                printf("Fehler beim Start von Bluetooth!\n");
+            }
+            else
+            {
+                printf("BT scout25 gestartet\n");
+            }
+
+
+    //  rotate for 360° - calibrate mfs-system and count impulses : 
+    // das System soll sich für 3 Sekunden um die eigene Achse drehen. 
+    // dabei soll Calibriert werden und es sollen die Impulse gezählt werden. 
+
+
+    watch = 3000;
+    oled.setCursor(0, 20);
+    onBoardLedOn();
+
 // --- derzeit kein Drehen!    drive( -250, 250); // dreh dich  --- nur calibrieren!
+
 
     while (watch)
     {
@@ -277,112 +308,159 @@ void setup()
         printImpulse();
     }
     
-    drive(0,0); 
+    drive(0, 0);  // left , right   -250 ... 
 
     onBoardLedOff();
 
-
     watch = 3000; while (watch); // drei Sekunden zum Ablesen der Impulswerte! 
-    PS4.begin("10:20:30:40:50:62");  // gleichzeitig wird der PS Controller initialisiert
 
-    // hier könnte man die ImpulsCounterWerte links und rechts speichern um dann damit die beiden Motoren unterschiedlich anzusprechen.
-    // .... 
+        break;
+
+        case MODE_MENU:
+
+        /*pinMode(LDR1, OUTPUT);
+    pinMode(LDR2, OUTPUT);
+    pinMode(LDR3, OUTPUT);
+    pinMode(LDR4, OUTPUT);
+
+    digitalWrite(LDR1, HIGH);
+    digitalWrite(LDR2, HIGH);
+    digitalWrite(LDR3, HIGH);
+    digitalWrite(LDR4, HIGH);*/
 
 
-
+        break; 
+    }
 
 }
 
 void loop() 
 {       
 static char flon = FALSE;
+static char x = 1;
+static int newL1 = 0; 
+static int oldL1 = 0;
+static int newR1 = 0; 
+static int oldR1 = 0;
+static int newT = 0; 
+static int oldT = 0;
 int c; 
+static int fled = 1; 
+
+
+    int SensorWert1 = analogRead(LDR1);
+    int SensorWert2 = analogRead(LDR2);
+    int SensorWert3 = analogRead(LDR3);
+    int SensorWert4 = analogRead(LDR4);
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
     angle = getMFC_Angle();
 
 
-    if (tenMSecFlag)
+    switch (mode)
     {
-        tenMSecFlag = FALSE;
+        case MODE_PS4:
 
-        while (BT.available()) 
-        {
-            c = BT.read();
-            BT.write((uint8_t)c);
-            Serial.write((uint8_t)c);
-        }
-    
-        if (connected)
-        {
-            if(PS4.L1()) { dirL = -dirL; }
-            if(PS4.R1()) { dirR = -dirR; }
-                
-            speedL = PS4.L2Value(); 
-
-            speedR = PS4.R2Value(); 
-
-            speedL = (dirL == 1) ? speedL: -speedL;
-            speedR = (dirR == 1) ? speedR: -speedR;
-
-            drive(speedL, speedR); 
-
-            if(PS4.Triangle())
+            if (tenMSecFlag)
             {
-                flon = (flon) ? FALSE : TRUE;
+                tenMSecFlag = FALSE;
+            
+                if (connected)
+                {
+                    speedL = PS4.L2Value(); 
+                    speedR = PS4.R2Value(); 
 
-            }
-            if (flon)
-            { 
-                   leds[0] = CRGB{0, 0, 255}; // R B G
-                   leds[1] = CRGB{0, 255, 255};
-                   leds[2] = CRGB{255, 0, 255};
-                   leds[3] = CRGB{255, 255, 0};
-                   FastLED.show();
-            }
-            else
-            { 
-                   leds[0] = CRGB{0, 0, 0}; // R B G
-                   leds[1] = CRGB{0, 0, 0};
-                   leds[2] = CRGB{0, 0, 0};
-                   leds[3] = CRGB{0, 0, 0};
-                   FastLED.show();
+                    newL1 = PS4.L1();
+                    if((newL1 != 0) && (oldL1 == 0)) 
+                    {
+                        dirL = -dirL;
+                    }
+                    oldL1 = newL1;
+
+                    newR1 = PS4.R1();
+                    if((newR1 != 0) && (oldR1 == 0)) 
+                    { 
+                        dirR = -dirR; 
+                    }
+                    oldR1 = newR1;
+            
+                    newT = PS4.Triangle();
+                    if((newT != 0) && (oldT == 0))
+                    {
+
+                    }
+                    oldT = newT;
+                }
+                else
+                {  
+                    if(PS4.isConnected())
+                    {
+                        connected = TRUE; 
+                        onBoardLedOn();
+
+                        switch (ps)
+                        {
+                            case PS4_GREEN: leds[0] = CRGB{0, 0, 255}; leds[1] = CRGB{0, 0, 255}; break;
+                            case PS4_RED:   leds[0] = CRGB{255, 0, 0}; leds[1] = CRGB{255, 0, 0};break;
+                            case PS4_BLUE:  leds[0] = CRGB{0, 255, 0}; leds[1] = CRGB{0, 255, 0};break;
+                        }   
+
+                        leds[2] = CRGB{0, 0, 0};
+                        leds[3] = CRGB{0, 0, 0};
+
+                        FastLED.show();
+                    }
+                }
             }
 
-        }
-        else
-        {  
-            if(PS4.isConnected())
+            if (qSecFlag)
             {
-               onBoardLedOn();
-               connected = TRUE;
-
-                   leds[0] = CRGB{0, 0, 255}; // R B G
-                   leds[1] = CRGB{0, 255, 255};
-                   leds[2] = CRGB{255, 0, 255};
-                   leds[3] = CRGB{255, 255, 0};
-                   FastLED.show();
-
+                qSecFlag = FALSE;
             }
-        }
-    }
-        
-   
-    if (qSecFlag)
-    {
-        qSecFlag = FALSE;
-   
 
-        digitalWrite(TRIG_PIN, LOW);
-        delay(5);
-        digitalWrite(TRIG_PIN, HIGH);
-        delay(5);
-        digitalWrite(TRIG_PIN, LOW);
-        distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
+            if (connected == TRUE)
+            {
+                drive( dirL * speedL,  dirR * speedR);
+            }
+
+        break;
+
+        case MODE_BT:
+
+            if (tenMSecFlag)
+            {
+                tenMSecFlag = FALSE;
+                while (BT.available()) 
+                {
+                    c = BT.read();
+                    BT.write((uint8_t)c);
+                    Serial.write((uint8_t)c);
+                }
+            }
+            if (qSecFlag)
+            {
+                qSecFlag = FALSE;
+        printf("prell: %d ldr1-4: %d %D %d %d\n", prell, SensorWert1, SensorWert2, SensorWert3, SensorWert4);
+        BT.write((uint8_t)prell + '0');
+
+            // distance: 
+
+                digitalWrite(TRIG_PIN, LOW);        delay(5);
+                digitalWrite(TRIG_PIN, HIGH);       delay(5);
+                digitalWrite(TRIG_PIN, LOW);        
+                distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
  
-        printData();
-    }
+                printData();
 
-    //watch = 1000; while(watch);
+            }
+
+        break;
+
+        case MODE_MENU:
+
+            // do nothing! 
+
+        break;
+    }
 }
 
 
@@ -553,7 +631,7 @@ void printImpulse(void)
 
 // EEPROM:
 
-void store2EEPROM(String word, int address)
+void storeStr2EEPROM(String word, int address)
 {
     int i;
 
@@ -564,6 +642,13 @@ void store2EEPROM(String word, int address)
     EEPROM.write(address + word.length(), '\0');    
     EEPROM.commit();  // Änderungen speichern
 }
+
+void storeVal2EEPROM(int x, int address)
+{
+    EEPROM.write(address, (char)x);    
+    EEPROM.commit();  // Änderungen speichern
+}
+
 
 String readFromEEPROM(int address)
 {
@@ -578,9 +663,10 @@ String readFromEEPROM(int address)
 
 void preSet(void)
 {
-    store2EEPROM("0", EEPROM_MOTOR_SYS_ADDR);
-    store2EEPROM("A1-A82861", EEPROM_SSID_ADDR);
-    store2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
+    storeStr2EEPROM("0", EEPROM_MOTOR_SYS_ADDR);
+    storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR);
+    storeStr2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
+    storeVal2EEPROM(PS4_GREEN, EEPROM_PS4_ADDR);     
 }
 
 void scanI2CBus()  // for checks
@@ -653,8 +739,20 @@ void impuls_L_isr(void)
 
 void impuls_R_isr(void)
 {
-    //digitalWrite(TEST_PIN_RX2, LOW);
+    static int x = 0; 
+/*
+    if (countR == 0)
+    {
+        x ^= 1;
+        digitalWrite(TEST_PIN_RX2, x);
+    }    
+    else
+    {
+        prell++;
+    }
+        */
     impulsFlagR = TRUE; 
+    countR = 40;
 }
 
 
@@ -669,12 +767,30 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
     static int32_t otick  = 0;
     static int32_t qtick = 0;
     static int32_t mtick = 0;
+    static int x = 0; 
     
     otick++;
     qtick++;
     mtick++;
     ramp++;
 
+
+    /*
+    x ^= 1;
+    //digitalWrite(TEST_PIN_TX2, x);
+
+
+    if (countR) 
+    {   countR--;
+        digitalWrite(TEST_PIN_TX2, LOW);
+
+    }
+    else
+    {
+        digitalWrite(TEST_PIN_TX2, HIGH);
+    }
+    */
+    
     if (impulsFlagL) {impulsFlagL = FALSE; impulsCntL++; }
     if (impulsFlagR) {impulsFlagR = FALSE; impulsCntR++; } 
 
