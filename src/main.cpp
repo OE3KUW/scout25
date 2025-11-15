@@ -75,6 +75,7 @@
 #define PS4_GRAY                        62
 #define DUAL_MODE                        0
 #define JOY_STICK                        1
+#define JOY_STICK_S                      2
 
 
 
@@ -102,6 +103,7 @@ volatile int impulsFlagL;
 volatile int impulsFlagR;
 int last_impulsCntL;
 int last_impulsCntR;
+int circleMode;
 
 float correctionRL; 
 volatile int countR = 0;
@@ -473,7 +475,7 @@ void setup()
             watch = 3000; while (watch)
             {
                 angle = getMFS_Angle() - 83.;  // bp str.4
-                printf("%d\n", watch);
+                //printf("%d\n", watch);
                 printComp(angle);
             }
             
@@ -515,6 +517,11 @@ static int newR1 = 0;
 static int oldR1 = 0;
 static int newT = 0; 
 static int oldT = 0;
+static int newS = 0; 
+static int oldS = 0;
+static int newC = 0; 
+static int oldC = 0;
+
 int c; 
 static int fled = 1; 
 float vx, vy, wr, wl;
@@ -525,8 +532,8 @@ float vx, vy, wr, wl;
     int SensorWert3 = analogRead(LDR3);
     int SensorWert4 = analogRead(LDR4);
 
-    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
-    angle = getMFS_Angle();
+    
+    //angle = getMFS_Angle();
     
 
     switch (mode)
@@ -536,7 +543,6 @@ float vx, vy, wr, wl;
             if (tenMSecFlag)
             {
                 tenMSecFlag = FALSE;
-
             
                 if (connected)
                 {
@@ -610,6 +616,58 @@ float vx, vy, wr, wl;
 
 
                         break;
+                    
+                        case JOY_STICK_S:
+
+                            vx = PS4.LStickX();
+                            vy = PS4.LStickY();
+                            wl = atan(vy/+vx) * 180 / M_PI;
+                            wr = atan(vy/-vx) * 180 / M_PI;
+                            if (vx < 0) wl += 180.;
+                            if (vx > 0) wr += 180.;
+
+                            if ((abs(vx) > 7) || (abs(vy) > 7))
+                            {
+                                // speedL = PS4.R2Value();
+                                if (wl > 0)
+                                {
+                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)* (wl/270.)) 
+                                             + minSpeed;
+                                    dirL = 1;
+                                }
+                                else
+                                {
+                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wl)/270.)) + minSpeed;
+                                    dirL = -1;
+
+                                }
+
+                                if (wr > 0)
+                                {
+                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*(wr/270.)) + minSpeed;
+                                    dirR = 1;
+
+                                }
+                                else
+                                {
+                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wr)/270.))
+                                     + minSpeed;
+                                    dirR = -1;
+                                }
+
+                            }
+                            else 
+                            {
+                                speedL = speedR = 0;
+                            }
+
+
+                            //printf("x %.1f y %.1f wl %.1f wr %.1f speedL %d\n", vx, vy, wl, wr, speedL);
+
+
+                        break;
+
+                    
                     }
             
                     newT = PS4.Triangle();
@@ -623,6 +681,28 @@ float vx, vy, wr, wl;
 
                     }
                     oldT = newT;
+
+                    newS = PS4.Square();
+                    if((newS != 0) && (oldS == 0))
+                    {
+                        psMode = (psMode == DUAL_MODE) ? JOY_STICK_S : DUAL_MODE;
+                        psMode = (psMode == JOY_STICK) ? JOY_STICK_S : DUAL_MODE; // ?? 
+
+                        if (psMode == JOY_STICK_S) onBoardLedOff();
+                        if (psMode == DUAL_MODE) onBoardLedOn();
+
+                    }
+                    oldS = newS;
+
+                    newC = PS4.Circle();
+                    if((newC != 0) && (oldC == 0))
+                    {
+                        circleMode = (circleMode) ? 0:1;
+                    }
+                    oldC = newC;
+
+                    
+                
                 }
                 else
                 {  
@@ -652,6 +732,10 @@ float vx, vy, wr, wl;
             if (qSecFlag)
             {
                 qSecFlag = FALSE;
+
+                // distance: 
+
+                
                 printData();
 
 
@@ -690,8 +774,9 @@ float vx, vy, wr, wl;
                 digitalWrite(TRIG_PIN, HIGH);       delay(5);
                 digitalWrite(TRIG_PIN, LOW);        
                 distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
- 
+
                 printData();
+                BT.printf("%6.2f;%6.2f\n", distance, angle);
 
 
                 /*  derzeit brauchen wir nicht zu fahren! 
@@ -922,43 +1007,64 @@ void printStored(void)
 void printData(void)
 {
     int angleInt = 0;
-    oled.fillRect(0, 0, 128, 64, 0); // clear all!
 
-    sprintf(text,"%c: 0.00 V", (ps == PS4_GRAY)? 'G': (ps == PS4_RED)? 'R':'B');
-    text[3] = (int)(batteryLevel) %10 + '0';
-    text[4] = '.';
-    text[5] = (int)(batteryLevel * 10 ) %10 + '0';
-    text[6] = (int)(batteryLevel * 100) %10 + '0';
-    oled.setCursor(20, 16);
-    oled.print(text);
+    angle = getMFS_Angle() - 83.;
 
-    sprintf(text,"w:       ");
+    if (circleMode)
+    {
+        printComp(angle);
+    }
+    else
+    {
+        batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
 
-    if (angle >= 0) { text[2] = '+'; angleInt = (int)(angle*10.);} else { text[2] = '-'; angleInt = (int)(angle*-10.); }
+        oled.fillRect(0, 0, 128, 64, 0); // clear all!
+
+        sprintf(text,"%c: 0.00 V", (ps == PS4_GRAY)? 'G': (ps == PS4_RED)? 'R':'B');
+        text[3] = (int)(batteryLevel) %10 + '0';
+        text[4] = '.';
+        text[5] = (int)(batteryLevel * 10 ) %10 + '0';
+        text[6] = (int)(batteryLevel * 100) %10 + '0';
+        oled.setCursor(20, 16);
+        oled.print(text);
+
+        sprintf(text,"w:       ");
+
+        if (angle >= 0) { text[2] = '+'; angleInt = (int)(angle*10.);} else { text[2] = '-'; angleInt = (int)(angle*-10.); }
     
-    if (angleInt >= 1000) text[4] = (int)(angleInt/1000) % 10 + '0';
-    if (angleInt >= 100)  text[5] = (int)(angleInt/100)  % 10 + '0';
-    text[6] = (int)(angleInt/10)                         % 10 + '0';
-    text[7] = '.';
-    text[8] = (int)(angleInt)                            % 10 + '0';
-    oled.setCursor(20, 32);
-    oled.print(text);
+        if (angleInt >= 1000) text[4] = (int)(angleInt/1000) % 10 + '0';
+        if (angleInt >= 100)  text[5] = (int)(angleInt/100)  % 10 + '0';
+        text[6] = (int)(angleInt/10)                         % 10 + '0';
+        text[7] = '.';
+        text[8] = (int)(angleInt)                            % 10 + '0';
+        oled.setCursor(20, 32);
+        oled.print(text);
 
-    sprintf(text,"d:       ");
-    if (distance >= 100.) text[2] = (int)(distance/100) % 10 + '0'; else text[2] = ' ';
-    if (distance >= 10.)  text[3] = (int)(distance/10)  % 10 + '0'; else text[3] = ' ';
-    text[4] = (int)(distance)    % 10 + '0';
-    text[5] = '.';
-    text[6] = (int)(distance*10) % 10 + '0';
-    text[7] = 'c';
-    text[8] = 'm';
-    oled.setCursor(20, 48);
-    oled.print(text);
+/*
+        digitalWrite(TRIG_PIN, LOW);        delay(5);
+        digitalWrite(TRIG_PIN, HIGH);       delay(5);
+        digitalWrite(TRIG_PIN, LOW);        
+        distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
+*/
+        if (connected == 0)
+        {
+            sprintf(text,"d:       ");
+            if (distance >= 100.) text[2] = (int)(distance/100) % 10 + '0'; else text[2] = ' ';
+            if (distance >= 10.)  text[3] = (int)(distance/10)  % 10 + '0'; else text[3] = ' ';
+            text[4] = (int)(distance)    % 10 + '0';
+            text[5] = '.';
+            text[6] = (int)(distance*10) % 10 + '0';
+            text[7] = 'c';
+            text[8] = 'm';
+            oled.setCursor(20, 48);
+            oled.print(text);
+        }
 
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
     // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     // oled.drawCircle(64, 32, 31, WHITE);
-    oled.display();
+        oled.display();
+    }
 }
 
 void printImpulse(void)
