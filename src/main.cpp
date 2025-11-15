@@ -4,7 +4,6 @@
 
                                                    қuran july 2025
 ******************************************************************/
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
@@ -16,6 +15,9 @@
 #include <BluetoothSerial.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include <esp_bt_main.h>
+#include <esp_gap_bt_api.h>
+#include <esp_bt_device.h>
 
 #define TRUE                            true
 #define FALSE                           false
@@ -29,7 +31,6 @@
 #define ON_BOARD_LED                    5                  // LoLin32 
 #define BATTERY_LEVEL                   A3                 // GPIO 39
 #define REFV                            685.0              // factor
-
 #define MFS                             0x1e               // magnetic field sensor
 
 #define WHEEL_L                         2
@@ -37,10 +38,17 @@
 #define WHEEL_L_DIRECTION               15 
 #define WHEEL_R_DIRECTION               A5
 
-#define EEPROM_SIZE                     100
+#define EEPROM_SIZE                     200
 #define EEPROM_ADDR                     0
-#define EEPROM_SSID_ADDR                0
-#define EEPROM_PASSWORD_ADDR            40
+#define EEPROM_ROB_NAME                 0
+#define EEPROM_BRIGHTNESS_LEVEL         19
+#define EEPROM_MIN_SPEED                21
+#define EEPROM_MFS_MINX                 24
+#define EEPROM_MFS_MAXX                 26
+#define EEPROM_MFS_MINY                 28
+#define EEPROM_MFS_MAXY                 30
+#define EEPROM_SSID_ADDR                40
+#define EEPROM_PASSWORD_ADDR            60
 #define EEPROM_MOTOR_SYS_ADDR           80
 #define EEPROM_PS4_ADDR                 82
 
@@ -62,14 +70,20 @@
 #define LDR3                            36 
 #define LDR4                            39 
 
-#define PS4_GREEN                       60
+#define PS4_BLUE                        60
 #define PS4_RED                         61
-#define PS4_BLUE                        62
+#define PS4_GRAY                        62
+#define DUAL_MODE                        0
+#define JOY_STICK                        1
+
+
+
 
 #define MODE_PS4                        0  
 #define MODE_MENU                       1
 #define MODE_BT                         2
-
+#define DRIVE                           1   
+#define ROTATE                          0
 
 hw_timer_t *timer = NULL;
 void IRAM_ATTR myTimer(void);
@@ -86,13 +100,17 @@ volatile int impulsCntL;
 volatile int impulsCntR;
 volatile int impulsFlagL;
 volatile int impulsFlagR;
+int last_impulsCntL;
+int last_impulsCntR;
+
 float correctionRL; 
 volatile int countR = 0;
 volatile int prell = 0;
 
-
 volatile float batteryLevel = 0.;
 volatile int motorSys = 0;
+String robName;
+String IntVal;
 String motorSysFromEEPROM = "";
 String pskey = "";
 String ssidWord = "";
@@ -117,16 +135,23 @@ char text[20];
 volatile static unsigned char ramp = 0;
 
 int mode;
+int minSpeed;
 int ps;
-
+int psMode;
+int msys;
+int stateBT = DRIVE;
+int isMFSavailable = FALSE;
 
 CRGB leds[NUM_LEDS];
 
 void preSet(void);
+void getSet(void);
 void storeStr2EEPROM(String word, int address);
-void storeVal2EEPROM(int x, int address);
-
 String readFromEEPROM(int address);
+void storeInt2EEPROM(int16_t x, int address);
+int16_t getIntFromEEPROM(int address);
+
+
 
 void rototateByCompass(int degree); 
 void drive(int left, int right);
@@ -135,23 +160,42 @@ void driveC(int l, int r);
 void onBoardLedOn(void);
 void onBoardLedOff(void);
 
-int  initMFC(void);
-void preppareMfsCalibrationSystem(void);
-int  calibrateMFC(void);
-void readRawMFC(int16_t* x, int16_t* y, int16_t* z);
-float getMFC_Angle();
+// MFS  magnetic field sensor:
+int  initMFS(void);
+void prepareMFSCalibrationSystem(void);
+int  calibrateMFS(void);
+void readRawMFS(int16_t* x, int16_t* y, int16_t* z);
+float getMFS_Angle();
 
 void impuls_R_isr(void);
 void impuls_L_isr(void);
 
-void scanI2CBus();   // for tests
-void printData(void);
-void printImpulse(void);
+void scanI2CBus();   // for tests only 
 
+void printData(void);   // Ausgabe am Display
+void printImpulse(void); 
+void printMotorSystem(int msys);
+void printPs4(int ps);
 
+void printStored(void);
+void printCount(int i); 
+void printSpeedMin(int i); 
+void printComp(float w);
+
+void printBtMac()
+{
+    const uint8_t* mac = esp_bt_dev_get_address();
+    printf("ESP32 BT MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+void clearBtClassicBonds();  // im Test... 
 
 void setup() 
 {
+    int count; 
+    bool ok = false;
+
     Serial.begin(115200);
     pinMode(ON_BOARD_LED, OUTPUT);
     pinMode(WHEEL_L, OUTPUT);
@@ -164,7 +208,6 @@ void setup()
     pinMode(TEST_PIN_RX2, INPUT_PULLUP);
     pinMode(TEST_PIN_TX2, INPUT_PULLUP);
 
-
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // deactiviere die Brownout Detection !!!
 
     /* restore all eeprom variables: */
@@ -173,38 +216,27 @@ void setup()
         return;
     }
 
-// Werte noch selbst speichern - das komt dann wieder weg! 
+//  Werte noch selbst speichern - das komt dann später weg !!! 
     preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
-
-
-    motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
-    motorSys = (char)motorSysFromEEPROM[0] - '0';
-    ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
-    password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
-    pskey = readFromEEPROM(EEPROM_PS4_ADDR);
-
-    ps = (char) pskey[0]; 
-
-
-
+    getSet();
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
 
     Wire.begin(21, 22); // i2c wird hier vorbereitet
 
     if (digitalRead(TEST_PIN_RX2) == LOW)
     {
-        mode = MODE_PS4;
+        mode = MODE_PS4;   
     }
     else if (digitalRead(TEST_PIN_TX2) == LOW)
     {
-        mode = MODE_MENU;
+        mode = MODE_MENU;  //  Calibrieren, Motorystem setzen
     }
     else 
     {
         mode = MODE_BT;
     }
-
-    
+   
 
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
@@ -220,8 +252,7 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
- 
-    preppareMfsCalibrationSystem();
+
     
     drive(0, 0);
 
@@ -230,14 +261,18 @@ void setup()
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
     watch = 100; while (watch); // 100 ms wait time
+
+    isMFSavailable = !initMFS(); // init liefert 0 falls der Baustein initialisiert werden konnte.
     
     printf("\n______________________________________________________________________________________\n");
     printf("battery: %1.3f\n", batteryLevel);
     printf("motorSystem: %d\n", motorSys);
+    printf("minSpeed %d\n", minSpeed);
     printf("ssid: %s\n", ssidWord);
     printf("password: %s\n", password);
-    printf("magneticfield-sesor: %d\n", initMFC());
-    printf("ps: %d\n", ps);
+    printf("ps4-System: %d %s\n", ps, (ps == PS4_GRAY) ? "gray" : (ps == PS4_RED) ? "red" : "blue");
+    printf("xMin %d xMax %d yMin %d yMax %d\n", xMin, xMax, yMin, yMax);
+    printf("magneticfield-sesor: (MFS) available: %s\n", (isMFSavailable) ? "yes":"no");
     printf("______________________________________________________________________________________\n");
     printf("start!\n");
     
@@ -245,12 +280,16 @@ void setup()
     oled.clearDisplay();
     oled.setTextSize(2);
     oled.setTextColor(WHITE);
-    oled.setCursor(0, 0);
-    oled.print("calibrate:");
+
+    oled.setCursor(20, 0);
+    oled.print(robName);
+
     // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
     // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     // oled.drawCircle(64, 32, 31, WHITE);
+
     oled.display();
+
 
     // scanI2CBus();  for tests  um herauszufinden welch devices vorhanden sind
 
@@ -263,24 +302,34 @@ void setup()
 
     FastLED.show();
 
-
     switch (mode)   // Init Phase: 
     {
         case MODE_PS4:
 
+            printf("ps4 mode!\n");
+            clearBtClassicBonds();        // *** ALTEN PAIRING-MÜLL LÖSCHEN ***
+            watch = 200; while(watch); // wait 0.2 sec
+
+
             connected = FALSE; 
+            psMode = DUAL_MODE;
 
             switch (ps)
             {
-                case PS4_GREEN: PS4.begin("10:20:30:40:50:60"); break;
-                case PS4_RED:   PS4.begin("10:20:30:40:50:61"); break;
-                case PS4_BLUE:  PS4.begin("10:20:30:40:50:62"); break;
+                case PS4_BLUE:  ok = PS4.begin("10:20:30:40:50:60"); break;  // mit 60 funkts nicht - warum? 
+                case PS4_RED:   ok = PS4.begin("10:20:30:40:50:61"); break;
+                case PS4_GRAY:  ok = PS4.begin("10:20:30:40:50:62"); break;
             }
+            if (!ok) printf("ps4 failed!\n");
+            else printf("ps4 started\n");
+
+            printBtMac();
 
         break; 
 
         case MODE_BT:
-            if (!BT.begin(BT_NAME)) 
+
+        if (!BT.begin(BT_NAME)) 
             {
                 printf("Fehler beim Start von Bluetooth!\n");
             }
@@ -288,49 +337,171 @@ void setup()
             {
                 printf("BT scout25 gestartet\n");
             }
-
-
-    //  rotate for 360° - calibrate mfs-system and count impulses : 
-    // das System soll sich für 3 Sekunden um die eigene Achse drehen. 
-    // dabei soll Calibriert werden und es sollen die Impulse gezählt werden. 
-
-
-    watch = 3000;
-    oled.setCursor(0, 20);
-    onBoardLedOn();
-
-// --- derzeit kein Drehen!    drive( -250, 250); // dreh dich  --- nur calibrieren!
-
-
-    while (watch)
-    {
-        calibrateMFC();
-        printImpulse();
-    }
-    
-    drive(0, 0);  // left , right   -250 ... 
-
-    onBoardLedOff();
-
-    watch = 3000; while (watch); // drei Sekunden zum Ablesen der Impulswerte! 
+            printf("BT mode\n");
+            drive(0,0);
 
         break;
 
         case MODE_MENU:
 
-        /*pinMode(LDR1, OUTPUT);
-    pinMode(LDR2, OUTPUT);
-    pinMode(LDR3, OUTPUT);
-    pinMode(LDR4, OUTPUT);
+/***********/
+/* M E N U */
+/***********/
 
-    digitalWrite(LDR1, HIGH);
-    digitalWrite(LDR2, HIGH);
-    digitalWrite(LDR3, HIGH);
-    digitalWrite(LDR4, HIGH);*/
+            leds[0] = CRGB{255, 255, 255}; // R B G
+            leds[1] = CRGB{255, 255, 255};
+            leds[2] = CRGB{255, 255, 255};
+            leds[3] = CRGB{255, 255, 255};
+
+            FastLED.show();
+
+        /*  Motorsystem wählen: */
+
+            msys = 0; 
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                msys = (msys) ? 0:1; 
+                printMotorSystem(msys);
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            if (msys == 0)
+                storeStr2EEPROM("0", EEPROM_MOTOR_SYS_ADDR);
+            else
+                storeStr2EEPROM("1", EEPROM_MOTOR_SYS_ADDR);
+
+            motorSys = msys;    
+            drive(0,0);    
+            printStored();
+            while (digitalRead(TEST_PIN_TX2) == HIGH);
+            drive(0,0);
+
+            watch = 500; while (watch); 
+
+            onBoardLedOn();
+ 
+            count = 3;
+
+            while (count > -1)
+            {
+                printCount(count); 
+                watch = 1000; while (watch); 
+                count--;
+            }
+
+            leds[0] = CRGB{0, 255, 255}; // R B G
+            leds[1] = CRGB{0, 255, 255};
+            leds[2] = CRGB{0, 255, 255};
+            leds[3] = CRGB{0, 255, 255};
+
+            FastLED.show();
+
+            watch = 500; while (watch);
+
+            count = 155; 
+            prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
+
+
+            while (count < 256) //255 letzter Wert!
+            {
+                drive(count, -count);
+                watch = 300; while (watch);
+                count += 5;
+                calibrateMFS();
+            }
+
+            leds[0] = CRGB{255, 0, 255}; // R B G
+            leds[1] = CRGB{255, 0, 255};
+            leds[2] = CRGB{255, 0, 255};
+            leds[3] = CRGB{255, 0, 255};
+            FastLED.show();
+
+            count = 255;
+            impulsCntL = 0;
+            impulsCntR = 0; 
+            last_impulsCntL = -2; 
+            last_impulsCntR = -2;
+
+            while (count > 30)
+            {
+                if (((impulsCntL - last_impulsCntL) > 1) && 
+                    ((impulsCntR - last_impulsCntR) > 1)     )
+                {
+
+                    last_impulsCntL = impulsCntL;
+                    last_impulsCntR = impulsCntR;
+
+                    drive(-count, count);
+                    calibrateMFS();
+                    printSpeedMin(count);
+                    impulsFlagL = impulsFlagR = FALSE;
+                    watch = 200; while (watch);
+                    if (count > 200) count -= 3; 
+                    else if (count > 150) count -= 5; 
+                    else if (count > 120) count -= 2; 
+                    else count--;
+                    //printf("count min : %d %d %d %d %d\n", count, impulsCntL, impulsCntR,
+                    //    impulsCntL - last_impulsCntL, impulsCntR - last_impulsCntR);
+                }
+                else
+                {
+                    minSpeed = count; 
+                    printSpeedMin(minSpeed);
+                    storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
+                    //printf("count min : %d \n", count);
+
+                    leds[0] = CRGB{0, 0, 0}; // R B G
+                    leds[1] = CRGB{0, 0, 0};
+                    leds[2] = CRGB{0, 0, 0};
+                    leds[3] = CRGB{0, 0, 0};
+                    FastLED.show();
+
+                    count = 0; 
+                }
+            }
+            
+            drive(0,0);
+            
+            storeInt2EEPROM(xMin, EEPROM_MFS_MINX);     
+            storeInt2EEPROM(xMax, EEPROM_MFS_MAXX);     
+            storeInt2EEPROM(yMin, EEPROM_MFS_MINY);     
+            storeInt2EEPROM(yMax, EEPROM_MFS_MAXY);     
+
+
+            watch = 500; while (watch); 
+            watch = 3000; while (watch)
+            {
+                angle = getMFS_Angle() - 83.;  // bp str.4
+                printf("%d\n", watch);
+                printComp(angle);
+            }
+            
+        // Controller: 
+
+            ps  = PS4_GRAY; 
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                ps++; 
+                if (ps > PS4_GRAY) ps = PS4_BLUE;
+                printPs4(ps);
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            storeInt2EEPROM(ps, EEPROM_PS4_ADDR);     
+
+            printStored();
+
+
+
+
+
 
 
         break; 
     }
+
 
 }
 
@@ -346,62 +517,128 @@ static int newT = 0;
 static int oldT = 0;
 int c; 
 static int fled = 1; 
+float vx, vy, wr, wl;
 
 
     int SensorWert1 = analogRead(LDR1);
     int SensorWert2 = analogRead(LDR2);
     int SensorWert3 = analogRead(LDR3);
     int SensorWert4 = analogRead(LDR4);
-    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
-    angle = getMFC_Angle();
 
+    batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
+    angle = getMFS_Angle();
+    
 
     switch (mode)
     {
         case MODE_PS4:
-
+       
             if (tenMSecFlag)
             {
                 tenMSecFlag = FALSE;
+
             
                 if (connected)
                 {
-                    speedL = PS4.L2Value(); 
-                    speedR = PS4.R2Value(); 
-
-                    newL1 = PS4.L1();
-                    if((newL1 != 0) && (oldL1 == 0)) 
+                    switch(psMode)
                     {
-                        dirL = -dirL;
-                    }
-                    oldL1 = newL1;
+                        case DUAL_MODE:
+                            speedL = PS4.L2Value(); 
+                            speedR = PS4.R2Value(); 
 
-                    newR1 = PS4.R1();
-                    if((newR1 != 0) && (oldR1 == 0)) 
-                    { 
-                        dirR = -dirR; 
+                            newL1 = PS4.L1();
+                            if((newL1 != 0) && (oldL1 == 0)) 
+                            {
+                                dirL = -dirL;
+                            }
+                            oldL1 = newL1;
+
+                            newR1 = PS4.R1();
+                            if((newR1 != 0) && (oldR1 == 0)) 
+                            { 
+                                dirR = -dirR; 
+                            }
+                            oldR1 = newR1;
+                        break;
+
+                        case JOY_STICK:
+
+                            vx = PS4.LStickX();
+                            vy = PS4.LStickY();
+                            wl = atan(vy/+vx) * 180 / M_PI;
+                            wr = atan(vy/-vx) * 180 / M_PI;
+                            if (vx < 0) wl += 180.;
+                            if (vx > 0) wr += 180.;
+
+                            if ((abs(vx) > 7) || (abs(vy) > 7))
+                            {
+                                // speedL = PS4.R2Value();
+                                if (wl > 0)
+                                {
+                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)* (wl/270.)) 
+                                             + minSpeed;
+                                    dirL = 1;
+                                }
+                                else
+                                {
+                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wl)/270.)) + minSpeed;
+                                    dirL = -1;
+
+                                }
+
+                                if (wr > 0)
+                                {
+                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*(wr/270.)) + minSpeed;
+                                    dirR = 1;
+
+                                }
+                                else
+                                {
+                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wr)/270.))
+                                     + minSpeed;
+                                    dirR = -1;
+                                }
+
+                            }
+                            else 
+                            {
+                                speedL = speedR = 0;
+                            }
+
+
+                            //printf("x %.1f y %.1f wl %.1f wr %.1f speedL %d\n", vx, vy, wl, wr, speedL);
+
+
+                        break;
                     }
-                    oldR1 = newR1;
             
                     newT = PS4.Triangle();
+
                     if((newT != 0) && (oldT == 0))
                     {
+                        psMode = (psMode == DUAL_MODE) ? JOY_STICK : DUAL_MODE;
+
+                        if (psMode == JOY_STICK) onBoardLedOff();
+                        if (psMode == DUAL_MODE) onBoardLedOn();
 
                     }
                     oldT = newT;
                 }
                 else
                 {  
+
                     if(PS4.isConnected())
                     {
                         connected = TRUE; 
                         onBoardLedOn();
 
+                        printf("connected!\n");
+
                         switch (ps)
                         {
-                            case PS4_GREEN: leds[0] = CRGB{0, 0, 255}; leds[1] = CRGB{0, 0, 255}; break;
-                            case PS4_RED:   leds[0] = CRGB{255, 0, 0}; leds[1] = CRGB{255, 0, 0};break;
-                            case PS4_BLUE:  leds[0] = CRGB{0, 255, 0}; leds[1] = CRGB{0, 255, 0};break;
+                            case PS4_GRAY: leds[0] = CRGB{0, 0, 255}; leds[1] = CRGB{0, 0, 255}; break;
+                            case PS4_RED:  leds[0] = CRGB{255, 0, 0}; leds[1] = CRGB{255, 0, 0}; break;
+                            case PS4_BLUE: leds[0] = CRGB{0, 255, 0}; leds[1] = CRGB{0, 255, 0}; break;
                         }   
 
                         leds[2] = CRGB{0, 0, 0};
@@ -415,11 +652,14 @@ static int fled = 1;
             if (qSecFlag)
             {
                 qSecFlag = FALSE;
+                printData();
+
+
             }
 
             if (connected == TRUE)
             {
-                drive( dirL * speedL,  dirR * speedR);
+                drive(dirL * speedL,  dirR * speedR);
             }
 
         break;
@@ -436,11 +676,13 @@ static int fled = 1;
                     Serial.write((uint8_t)c);
                 }
             }
+
             if (qSecFlag)
             {
                 qSecFlag = FALSE;
-        printf("prell: %d ldr1-4: %d %D %d %d\n", prell, SensorWert1, SensorWert2, SensorWert3, SensorWert4);
-        BT.write((uint8_t)prell + '0');
+
+//        printf("prell: %d ldr1-4: %d %D %d %d\n", prell, SensorWert1, SensorWert2, SensorWert3, SensorWert4);
+//        BT.write((uint8_t)prell + '0');
 
             // distance: 
 
@@ -451,6 +693,37 @@ static int fled = 1;
  
                 printData();
 
+
+                /*  derzeit brauchen wir nicht zu fahren! 
+
+                if(stateBT == DRIVE)
+                {
+                    drive(255,255);
+                    leds[0] = CRGB{0, 0, 255}; // R B G
+                    leds[1] = CRGB{0, 0, 255};
+                    leds[2] = CRGB{0, 0, 255};
+                    leds[3] = CRGB{0, 0, 255};
+
+                    FastLED.show();
+
+
+                    if (distance <= 20) stateBT = ROTATE;
+
+                }
+                else
+                {
+                    drive(255, -255);
+                    if (distance >= 30) stateBT = DRIVE;
+
+                    leds[0] = CRGB{255, 0, 0}; // R B G
+                    leds[1] = CRGB{255, 0, 0};
+                    leds[2] = CRGB{255, 0, 0};
+                    leds[3] = CRGB{255, 0, 0};
+
+                    FastLED.show();
+
+                }
+                */
             }
 
         break;
@@ -464,10 +737,11 @@ static int fled = 1;
 }
 
 
-// Magnetic field sensor:
+// Magnetic Field Sensor:
 
-int initMFC(void)
+int initMFS(void)
 {
+  // RETURN 0 ... success; 2 kein device gfunden; 3 Fehler bei der Übertragung der Daten an den Baustein  
   Wire.beginTransmission(MFS);
   Wire.write(0x00); Wire.write(0x70); // Konfiguration A
   Wire.endTransmission();
@@ -481,29 +755,37 @@ int initMFC(void)
   return Wire.endTransmission();
 }
 
-void preppareMfsCalibrationSystem(void)
+void prepareMFSCalibrationSystem(void)
 {
     xMin = yMin = 32767;
     xMax = yMax = -32768;
 }
 
 
-void readRawMFC(int16_t* x, int16_t* y, int16_t* z)
+void readRawMFS(int16_t* x, int16_t* y, int16_t* z)
 {
-    Wire.beginTransmission(MFS);
-    Wire.write(0x03);
-    Wire.endTransmission(false); 
-
-    Wire.requestFrom(MFS, 6); 
-    if (Wire.available() == 6) 
+    if (isMFSavailable)
     {
-        *x = Wire.read() << 8; *x |= Wire.read(); 
-        *z = Wire.read() << 8; *z |= Wire.read(); 
-        *y = Wire.read() << 8; *y |= Wire.read(); 
-    } 
+
+        Wire.beginTransmission(MFS);
+        Wire.write(0x03);
+        Wire.endTransmission(false); 
+
+        Wire.requestFrom(MFS, 6); 
+        if (Wire.available() == 6) 
+        {
+            *x = Wire.read() << 8; *x |= Wire.read(); 
+            *z = Wire.read() << 8; *z |= Wire.read(); 
+            *y = Wire.read() << 8; *y |= Wire.read(); 
+        } 
+    }
+    else
+    {
+        *x = *y = *z = 0;
+    }
 }
 
-int calibrateMFC(void)
+int calibrateMFS(void)
 // this function has to be called during rotation!
 // after 42 calls - the system schould 
 // have been rotated over 360° - just simple!
@@ -511,7 +793,7 @@ int calibrateMFC(void)
     int ret = FALSE; 
     unsigned long lastSampleTime = 0;
 
-    readRawMFC(&x, &y, &z);
+    readRawMFS(&x, &y, &z);
 
     // Ausreißer sollten eliminiert werden... (-4600...) 
 
@@ -523,32 +805,39 @@ int calibrateMFC(void)
     if ( ((xMax -xMin) > 180) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; 
 
 
-    printf("|| x: %04d  %04d  xmin: %04d xmax: %04d ||  y: %04d  %04d ymin %04d ymax %04d || L: %04d R: %04d || ret: %d angle: %3.2f\n",
-            x, (xMax - xMin), xMin, xMax, y, (yMax - yMin), yMin, yMax, impulsCntL, impulsCntR, ret, getMFC_Angle());
+    //printf("|| x: %04d  %04d  xmin: %04d xmax: %04d ||  y: %04d  %04d ymin %04d ymax %04d || L: %04d R: %04d || ret: %d angle: %3.2f\n",
+    //        x, (xMax - xMin), xMin, xMax, y, (yMax - yMin), yMin, yMax, impulsCntL, impulsCntR, ret, getMFS_Angle());
 
 
     return ret;
 }
 
-float getMFC_Angle()
+float getMFS_Angle()
 {
     float xw, yw, angle;
 
-    readRawMFC(&x, &y, &z);
-
-    if ((xMax != xMin) && (yMax != yMin))  // avoid div by zero
+    if (isMFSavailable)
     {
-        xw = 2.0 * (x - xMin) / (xMax - xMin) - 1.0;
-        yw = 2.0 * (y - yMin) / (yMax - yMin) - 1.0;
-        angle = atan2(-yw, xw) * 180.0 / M_PI;
-    }
-    else 
-    {
-        angle = 0.;
-    }
 
-    if (angle < -90.) angle += 360.;
-    angle -= 90.;
+        readRawMFS(&x, &y, &z);
+
+        if ((xMax != xMin) && (yMax != yMin))  // avoid div by zero
+        {
+            xw = 2.0 * (x - xMin) / (xMax - xMin) - 1.0;
+            yw = 2.0 * (y - yMin) / (yMax - yMin) - 1.0;
+            angle = atan2(-yw, xw) * 180.0 / M_PI;
+        }
+        else 
+        {
+            angle = 0.;
+        }
+
+        if (angle < -90.) angle += 360.;
+        angle -= 90.;
+
+    }
+    else
+    angle = 0;
 
     // South = 0°
     // East = 90°
@@ -561,13 +850,81 @@ float getMFC_Angle()
 
 
 // OLED DISPLAY:
+void printComp(float w)
+{
+    int x, y;
+
+    x = 30 * cos(w * M_PI / 180.);
+    y = 30 * sin(w * M_PI / 180.);
+
+    oled.fillRect(0, 0, 128, 64, 0); // clear all!
+    
+    while ( w < 180.) w += 360.;
+    while ( w > 180.) w -= 360.;
+
+    sprintf(text,"w: %3.1f", w);
+    oled.setCursor(0, 48);
+    oled.print(text);
+    oled.drawCircle(64, 32, 31, WHITE);
+    oled.drawLine(64, 32, x + 64, y + 32, WHITE);
+    oled.display();
+}
+
+
+void printSpeedMin(int i)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"s-Min:%d",i);
+    oled.setCursor(20, 32);
+    oled.print(text);
+    oled.display();
+}
+
+void printCount(int i)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"in: %c sec", i  + '0');
+    oled.setCursor(20, 32);
+    oled.print(text);
+    oled.display();
+}
+
+void printPs4(int ps)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"ps: %s", (ps == PS4_GRAY) ? "gray" : 
+                           (ps == PS4_RED) ? "red" : 
+                           "blue");
+    oled.setCursor(20, 32);
+    oled.print(text);
+    oled.display();
+}
+
+
+void printMotorSystem(int msys)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"m-sys: %c", msys  + '0');
+    oled.setCursor(20, 32);
+    oled.print(text);
+    oled.display();
+}
+void printStored(void)
+{
+    sprintf(text,"stored!");
+    oled.setCursor(20, 48);
+    oled.print(text);
+    oled.display();
+}
+
+
 
 void printData(void)
 {
     int angleInt = 0;
     oled.fillRect(0, 0, 128, 64, 0); // clear all!
 
-    sprintf(text,"b: 0.00 V");
+    sprintf(text,"%c: 0.00 V", (ps == PS4_GRAY)? 'G': (ps == PS4_RED)? 'R':'B');
     text[3] = (int)(batteryLevel) %10 + '0';
     text[4] = '.';
     text[5] = (int)(batteryLevel * 10 ) %10 + '0';
@@ -643,10 +1000,26 @@ void storeStr2EEPROM(String word, int address)
     EEPROM.commit();  // Änderungen speichern
 }
 
-void storeVal2EEPROM(int x, int address)
+
+
+
+
+void storeInt2EEPROM(int16_t x, int address)
 {
-    EEPROM.write(address, (char)x);    
+    uint8_t low  = x & 0xFF;
+    uint8_t high = (x >> 8) & 0xFF;
+
+    EEPROM.write(address,     low);    
+    EEPROM.write(address + 1, high);    
     EEPROM.commit();  // Änderungen speichern
+}
+
+int16_t getIntFromEEPROM(int address)
+{
+    uint8_t low  = EEPROM.read(address);
+    uint8_t high = EEPROM.read(address + 1);
+
+    return (int16_t)(low | (high << 8));
 }
 
 
@@ -663,11 +1036,29 @@ String readFromEEPROM(int address)
 
 void preSet(void)
 {
-    storeStr2EEPROM("0", EEPROM_MOTOR_SYS_ADDR);
-    storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR);
+    storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
+    storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
+    storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR); // das sind noch alte Daten... 
     storeStr2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
-    storeVal2EEPROM(PS4_GREEN, EEPROM_PS4_ADDR);     
 }
+
+void getSet(void)
+{
+    byte high, low;
+    robName = readFromEEPROM(EEPROM_ROB_NAME);
+    minSpeed = getIntFromEEPROM(EEPROM_MIN_SPEED);
+    motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
+    motorSys = (char)motorSysFromEEPROM[0] - '0';
+    ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
+    password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
+    ps = getIntFromEEPROM(EEPROM_PS4_ADDR);
+    xMin = getIntFromEEPROM(EEPROM_MFS_MINX);
+    xMax = getIntFromEEPROM(EEPROM_MFS_MAXX);
+    yMin = getIntFromEEPROM(EEPROM_MFS_MINY);
+    yMax = getIntFromEEPROM(EEPROM_MFS_MAXY);
+   
+}
+
 
 void scanI2CBus()  // for checks
 {
@@ -734,6 +1125,7 @@ void onBoardLedOff(void)
 void impuls_L_isr(void)
 {
     impulsFlagL = TRUE; 
+    impulsCntL++;
 }
 
 
@@ -752,8 +1144,41 @@ void impuls_R_isr(void)
     }
         */
     impulsFlagR = TRUE; 
-    countR = 40;
+    impulsCntR++;
 }
+
+void clearBtClassicBonds() 
+{
+  int dev_num = esp_bt_gap_get_bond_device_num();
+  if (dev_num <= 0) return;
+
+  esp_bd_addr_t *list = (esp_bd_addr_t*)malloc(sizeof(esp_bd_addr_t) * dev_num);
+  if (!list) return;
+
+  if (esp_bt_gap_get_bond_device_list(&dev_num, list) == ESP_OK) {
+    for (int i = 0; i < dev_num; ++i) {
+      esp_bt_gap_remove_bond_device(list[i]);
+    }
+  }
+  free(list);
+}
+
+// Baustelle: Baustelle: Baustelle: Baustelle: Baustelle: 
+
+/*  pinMode(LDR1, OUTPUT);  // für die LEDs
+    pinMode(LDR2, OUTPUT);
+    pinMode(LDR3, OUTPUT);
+    pinMode(LDR4, OUTPUT);
+
+    digitalWrite(LDR1, HIGH);
+    digitalWrite(LDR2, HIGH);
+    digitalWrite(LDR3, HIGH);
+    digitalWrite(LDR4, HIGH);*/
+
+
+
+
+
 
 
 //******************************************************************
@@ -791,8 +1216,8 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
     }
     */
     
-    if (impulsFlagL) {impulsFlagL = FALSE; impulsCntL++; }
-    if (impulsFlagR) {impulsFlagR = FALSE; impulsCntR++; } 
+//    if (impulsFlagL) {impulsFlagL = FALSE; impulsCntL++; }
+//    if (impulsFlagR) {impulsFlagR = FALSE; impulsCntR++; } 
 
 
     if (otick >= WAIT_ONE_SEC) 
@@ -817,16 +1242,16 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
     // PWM:
     if (motorSys == 0) 
     {
-        if (ramp > vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
-        if (ramp > vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
+        if (ramp >= vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
+        if (ramp >= vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
     }
     if (motorSys == 1) // System mit Zusatzprint:
     { 
-        if (LDir) if (ramp < vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
-        else      if (ramp > vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
+        if (LDir) if (ramp <= vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
+        else      if (ramp >= vL) digitalWrite(WHEEL_L, L);  else digitalWrite(WHEEL_L, H);
 
-        if (RDir) if (ramp < vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
-        else      if (ramp > vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
+        if (RDir) if (ramp <= vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
+        else      if (ramp >= vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
     }
 
 }
