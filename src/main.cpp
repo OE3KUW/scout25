@@ -698,6 +698,7 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                          if (strcmp(rxBuf, "#RESET") == 0)
                         {
                             printf("Reset!\n");
+                            
                             vLSum = vRSum = 0;
 
                     continue;   // fertig mit dieser Zeile
