@@ -75,7 +75,6 @@
 #define PS4_GRAY                        62
 #define DUAL_MODE                        0
 #define JOY_STICK                        1
-#define JOY_STICK_S                      2
 
 
 
@@ -129,6 +128,8 @@ float angle = 0.;
 int speed, diff;
 int speedL, speedR; 
 int dirL = 1, dirR = 1;
+int vLSum = 0, vRSum = 0;
+bool squareMode = FALSE;
 int connected = FALSE;
 int speedMin;
 float distance;
@@ -153,9 +154,6 @@ String readFromEEPROM(int address);
 void storeInt2EEPROM(int16_t x, int address);
 int16_t getIntFromEEPROM(int address);
 
-
-
-void rototateByCompass(int degree); 
 void drive(int left, int right);
 void driveC(int l, int r);
 
@@ -495,12 +493,6 @@ void setup()
 
             printStored();
 
-
-
-
-
-
-
         break; 
     }
 
@@ -526,15 +518,17 @@ int c;
 static int fled = 1; 
 float vx, vy, wr, wl;
 
+static char rxBuf[32];
+static int  rxPos = 0;
+int joyX = 0, joyY = 0;   // -128 .. +128
 
+
+/*
     int SensorWert1 = analogRead(LDR1);
     int SensorWert2 = analogRead(LDR2);
     int SensorWert3 = analogRead(LDR3);
     int SensorWert4 = analogRead(LDR4);
-
-    
-    //angle = getMFS_Angle();
-    
+*/
 
     switch (mode)
     {
@@ -596,7 +590,6 @@ float vx, vy, wr, wl;
                                 {
                                     speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*(wr/270.)) + minSpeed;
                                     dirR = 1;
-
                                 }
                                 else
                                 {
@@ -604,70 +597,15 @@ float vx, vy, wr, wl;
                                      + minSpeed;
                                     dirR = -1;
                                 }
-
                             }
                             else 
                             {
                                 speedL = speedR = 0;
                             }
 
-
                             //printf("x %.1f y %.1f wl %.1f wr %.1f speedL %d\n", vx, vy, wl, wr, speedL);
 
-
                         break;
-                    
-                        case JOY_STICK_S:
-
-                            vx = PS4.LStickX();
-                            vy = PS4.LStickY();
-                            wl = atan(vy/+vx) * 180 / M_PI;
-                            wr = atan(vy/-vx) * 180 / M_PI;
-                            if (vx < 0) wl += 180.;
-                            if (vx > 0) wr += 180.;
-
-                            if ((abs(vx) > 7) || (abs(vy) > 7))
-                            {
-                                // speedL = PS4.R2Value();
-                                if (wl > 0)
-                                {
-                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)* (wl/270.)) 
-                                             + minSpeed;
-                                    dirL = 1;
-                                }
-                                else
-                                {
-                                    speedL = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wl)/270.)) + minSpeed;
-                                    dirL = -1;
-
-                                }
-
-                                if (wr > 0)
-                                {
-                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*(wr/270.)) + minSpeed;
-                                    dirR = 1;
-
-                                }
-                                else
-                                {
-                                    speedR = (PS4.R2Value()/128.)*((255 - minSpeed)*((-wr)/270.))
-                                     + minSpeed;
-                                    dirR = -1;
-                                }
-
-                            }
-                            else 
-                            {
-                                speedL = speedR = 0;
-                            }
-
-
-                            //printf("x %.1f y %.1f wl %.1f wr %.1f speedL %d\n", vx, vy, wl, wr, speedL);
-
-
-                        break;
-
-                    
                     }
             
                     newT = PS4.Triangle();
@@ -675,7 +613,7 @@ float vx, vy, wr, wl;
                     if((newT != 0) && (oldT == 0))
                     {
                         psMode = (psMode == DUAL_MODE) ? JOY_STICK : DUAL_MODE;
-
+                        squareMode = FALSE;  
                         if (psMode == JOY_STICK) onBoardLedOff();
                         if (psMode == DUAL_MODE) onBoardLedOn();
 
@@ -685,10 +623,9 @@ float vx, vy, wr, wl;
                     newS = PS4.Square();
                     if((newS != 0) && (oldS == 0))
                     {
-                        psMode = (psMode == DUAL_MODE) ? JOY_STICK_S : DUAL_MODE;
-                        psMode = (psMode == JOY_STICK) ? JOY_STICK_S : DUAL_MODE; // ?? 
-
-                        if (psMode == JOY_STICK_S) onBoardLedOff();
+                        psMode = (psMode == DUAL_MODE) ? JOY_STICK : DUAL_MODE;
+                        squareMode = TRUE;  
+                        if (psMode == JOY_STICK) onBoardLedOff();
                         if (psMode == DUAL_MODE) onBoardLedOn();
 
                     }
@@ -700,18 +637,13 @@ float vx, vy, wr, wl;
                         circleMode = (circleMode) ? 0:1;
                     }
                     oldC = newC;
-
-                    
-                
                 }
                 else
                 {  
-
                     if(PS4.isConnected())
                     {
                         connected = TRUE; 
                         onBoardLedOn();
-
                         printf("connected!\n");
 
                         switch (ps)
@@ -734,10 +666,7 @@ float vx, vy, wr, wl;
                 qSecFlag = FALSE;
 
                 // distance: 
-
-                
                 printData();
-
 
             }
 
@@ -756,8 +685,95 @@ float vx, vy, wr, wl;
                 while (BT.available()) 
                 {
                     c = BT.read();
-                    BT.write((uint8_t)c);
-                    Serial.write((uint8_t)c);
+
+                    //BT.write((uint8_t)c);
+                    //Serial.write((uint8_t)c);
+
+                    if (c == '\n' || c == '\r') 
+                    {
+                        rxBuf[rxPos] = '\0';
+                        rxPos = 0;
+                         // 1) RESET-Kommando
+        
+                         if (strcmp(rxBuf, "#RESET") == 0)
+                        {
+                            printf("Reset!\n");
+                            vLSum = vRSum = 0;
+
+                    continue;   // fertig mit dieser Zeile
+                        }
+
+                        // Format: Jx;y   z.B. J-10;25
+                        if (rxBuf[0] == 'J') 
+                        {
+                            int x, y;
+                            if (sscanf(&rxBuf[1], "%d;%d", &x, &y) == 2) 
+                            {
+                                joyX = x;    // hier hast du die Joystickwerte
+                                joyY = y;
+                    // Debug:
+                                //printf("Joystick: X=%d Y=%d\n", joyX, joyY);
+
+                                vx = joyX;
+                                vy = joyY;
+                                wl = atan(vy/+vx) * 180 / M_PI;
+                                wr = atan(vy/-vx) * 180 / M_PI;
+                            
+                                
+                                if ((vx >= 0) && (vy >= 0)) { dirL = dirR = 1; wr += 180; }
+                                if ((vx <  0) && (vy >= 0)) { dirL = dirR = 1; wl += 180; }
+                                if ((vx <  0) && (vy <  0)) { dirL = dirR =-1; wl = - wl + 180; }
+                                if ((vx >= 0) && (vy <  0)) { dirL = dirR =-1; wr = - wr + 180; }
+                                
+                                speedR = speedL = sqrt(vx*vx + vy*vy)*sqrt(2);
+
+                                if ((abs(vx) > 7) || (abs(vy) > 7))
+                                {
+                                    // speedL = PS4.R2Value();
+                                    if (wl > 0)
+                                    {
+                                        speedL = (speedL/256.)*((255 - minSpeed)* (wl/180.)) + minSpeed;
+                                    }
+                                    else
+                                    {
+                                        speedL = (speedL/256.)*((255 - minSpeed)*((-wl)/180.)) + minSpeed;
+                                    }
+
+                                    if (wr > 0)
+                                    {
+                                        speedR = (speedR/256.)*((255 - minSpeed)*(wr/180.)) + minSpeed;
+                                    }
+                                    else
+                                    {
+                                        speedR = (speedR/256.)*((255 - minSpeed)*((-wr)/180.)) + minSpeed;
+                                    }
+                                }
+                                else 
+                                {
+                                    speedL = speedR = 0;
+                                }
+                            
+//                                printf("BT JOY:  wl %.1f wr %.1f speedL %d speedR %d dirL %d  dirR %d\n", 
+//                                    wl, wr, speedL, speedR, dirL, dirR);
+
+                                drive(dirL * speedL,  dirR * speedR);
+
+
+                            }
+                        }
+                    } 
+                    else 
+                    {
+                        if (rxPos < (int)sizeof(rxBuf) - 1) 
+                        {
+                            rxBuf[rxPos++] = c;
+                        }
+
+                        if (strcmp(rxBuf, "#RESET") == 0)
+                        {
+                            printf("Reset!\n");
+                        }
+                    }
                 }
             }
 
@@ -776,8 +792,8 @@ float vx, vy, wr, wl;
                 distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
 
                 printData();
-                BT.printf("%6.2f;%6.2f\n", distance, angle);
-
+                BT.printf("%6.2f;%6.2f;%d;%d;%6.2f\n", distance, angle, vLSum, vRSum, batteryLevel);
+                //printf("%6.2f;%6.2f;%d;%d;%6.2f\n", distance, angle, vLSum, vRSum, batteryLevel);
 
                 /*  derzeit brauchen wir nicht zu fahren! 
 
@@ -814,9 +830,7 @@ float vx, vy, wr, wl;
         break;
 
         case MODE_MENU:
-
             // do nothing! 
-
         break;
     }
 }
@@ -871,9 +885,6 @@ void readRawMFS(int16_t* x, int16_t* y, int16_t* z)
 }
 
 int calibrateMFS(void)
-// this function has to be called during rotation!
-// after 42 calls - the system schould 
-// have been rotated over 360° - just simple!
 {
     int ret = FALSE; 
     unsigned long lastSampleTime = 0;
@@ -903,7 +914,6 @@ float getMFS_Angle()
 
     if (isMFSavailable)
     {
-
         readRawMFS(&x, &y, &z);
 
         if ((xMax != xMin) && (yMax != yMin))  // avoid div by zero
@@ -919,7 +929,6 @@ float getMFS_Angle()
 
         if (angle < -90.) angle += 360.;
         angle -= 90.;
-
     }
     else
     angle = 0;
@@ -931,8 +940,6 @@ float getMFS_Angle()
 
     return angle;  
 }
-
-
 
 // OLED DISPLAY:
 void printComp(float w)
@@ -1090,8 +1097,6 @@ void printImpulse(void)
     oled.display();
 }
 
-
-
 // EEPROM:
 
 void storeStr2EEPROM(String word, int address)
@@ -1105,9 +1110,6 @@ void storeStr2EEPROM(String word, int address)
     EEPROM.write(address + word.length(), '\0');    
     EEPROM.commit();  // Änderungen speichern
 }
-
-
-
 
 
 void storeInt2EEPROM(int16_t x, int address)
@@ -1127,7 +1129,6 @@ int16_t getIntFromEEPROM(int address)
 
     return (int16_t)(low | (high << 8));
 }
-
 
 String readFromEEPROM(int address)
 {
@@ -1165,7 +1166,6 @@ void getSet(void)
    
 }
 
-
 void scanI2CBus()  // for checks
 {
     byte error, address;
@@ -1181,7 +1181,6 @@ void scanI2CBus()  // for checks
         }
     }
 }
-
 
 
 //  driving system:
@@ -1207,15 +1206,7 @@ void driveC(int l, int r)
      printf("driveC lc: %03d rc %03d\n", lc, rc);
 }
 
-
-
-void rototateByCompass(int degree)
-{
-
-}
-
 // lights:
-
 void onBoardLedOn(void)
 {
     digitalWrite(ON_BOARD_LED, LOW);  // it's inverese connected
@@ -1226,31 +1217,20 @@ void onBoardLedOff(void)
     digitalWrite(ON_BOARD_LED, HIGH);  
 }
 
-
-
 void impuls_L_isr(void)
 {
     impulsFlagL = TRUE; 
     impulsCntL++;
+    vLSum += (dirL>0)? 1:-1;
 }
 
 
 void impuls_R_isr(void)
 {
     static int x = 0; 
-/*
-    if (countR == 0)
-    {
-        x ^= 1;
-        digitalWrite(TEST_PIN_RX2, x);
-    }    
-    else
-    {
-        prell++;
-    }
-        */
     impulsFlagR = TRUE; 
     impulsCntR++;
+    vRSum += (dirR>0)? 1:-1;
 }
 
 void clearBtClassicBonds() 
@@ -1269,31 +1249,12 @@ void clearBtClassicBonds()
   free(list);
 }
 
-// Baustelle: Baustelle: Baustelle: Baustelle: Baustelle: 
-
-/*  pinMode(LDR1, OUTPUT);  // für die LEDs
-    pinMode(LDR2, OUTPUT);
-    pinMode(LDR3, OUTPUT);
-    pinMode(LDR4, OUTPUT);
-
-    digitalWrite(LDR1, HIGH);
-    digitalWrite(LDR2, HIGH);
-    digitalWrite(LDR3, HIGH);
-    digitalWrite(LDR4, HIGH);*/
-
-
-
-
-
-
-
 //******************************************************************
-
 //              T i m e r   I n t e r r u  p t : 
-
+//      periodic timer interrupt, expires each 0.1 msec
 //******************************************************************
 
-void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 msec
+void IRAM_ATTR myTimer(void)   
 {
     static int32_t otick  = 0;
     static int32_t qtick = 0;
@@ -1304,27 +1265,6 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
     qtick++;
     mtick++;
     ramp++;
-
-
-    /*
-    x ^= 1;
-    //digitalWrite(TEST_PIN_TX2, x);
-
-
-    if (countR) 
-    {   countR--;
-        digitalWrite(TEST_PIN_TX2, LOW);
-
-    }
-    else
-    {
-        digitalWrite(TEST_PIN_TX2, HIGH);
-    }
-    */
-    
-//    if (impulsFlagL) {impulsFlagL = FALSE; impulsCntL++; }
-//    if (impulsFlagR) {impulsFlagR = FALSE; impulsCntR++; } 
-
 
     if (otick >= WAIT_ONE_SEC) 
     {
@@ -1359,6 +1299,4 @@ void IRAM_ATTR myTimer(void)   // periodic timer interrupt, expires each 0.1 mse
         if (RDir) if (ramp <= vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
         else      if (ramp >= vR) digitalWrite(WHEEL_R, L);  else digitalWrite(WHEEL_R, H);
     }
-
 }
-
