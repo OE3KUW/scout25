@@ -2,7 +2,7 @@
 
                         s c o u t 2 5
 
-                                                   қuran july 2025
+                                                   қuran nov 2025
 ******************************************************************/
 #include <Arduino.h>
 #include <Wire.h>
@@ -70,14 +70,12 @@
 #define LDR3                            36 
 #define LDR4                            39 
 
-#define PS4_BLUE                        60
 #define PS4_RED                         61
 #define PS4_GRAY                        62
-#define DUAL_MODE                        0
-#define JOY_STICK                        1
+#define PS4_BLUE                        60
 
-
-
+#define DUAL_MODE                       0
+#define JOY_STICK                       1
 
 #define MODE_PS4                        0  
 #define MODE_MENU                       1
@@ -138,6 +136,7 @@ char text[20];
 volatile static unsigned char ramp = 0;
 
 int mode;
+int autonomous;
 int minSpeed;
 int ps;
 int psMode;
@@ -153,34 +152,33 @@ void storeStr2EEPROM(String word, int address);
 String readFromEEPROM(int address);
 void storeInt2EEPROM(int16_t x, int address);
 int16_t getIntFromEEPROM(int address);
-
 void drive(int left, int right);
 void driveC(int l, int r);
-
 void onBoardLedOn(void);
 void onBoardLedOff(void);
-
-// MFS  magnetic field sensor:
 int  initMFS(void);
 void prepareMFSCalibrationSystem(void);
 int  calibrateMFS(void);
 void readRawMFS(int16_t* x, int16_t* y, int16_t* z);
 float getMFS_Angle();
-
 void impuls_R_isr(void);
 void impuls_L_isr(void);
-
 void scanI2CBus();   // for tests only 
-
 void printData(void);   // Ausgabe am Display
 void printImpulse(void); 
 void printMotorSystem(int msys);
 void printPs4(int ps);
-
 void printStored(void);
 void printCount(int i); 
 void printSpeedMin(int i); 
 void printComp(float w);
+void printClearQ(void);
+void printCleared(void);
+void printRobName(const String& name);
+void printClearQ(void);
+void printCleared(void);
+
+void switchLedsOn(int ps, int sMode);
 
 void printBtMac()
 {
@@ -190,6 +188,20 @@ void printBtMac()
 }
 
 void clearBtClassicBonds();  // im Test... 
+
+void f(unsigned char a, unsigned char b, unsigned char c,  unsigned char d, unsigned char e, unsigned char f,
+       unsigned char g, unsigned char h, unsigned char i,  unsigned char j, unsigned char k, unsigned char l)
+{
+    leds[0] = CRGB{a, b, c}; 
+    leds[1] = CRGB{d, e, f}; 
+    leds[2] = CRGB{g, h, i}; 
+    leds[3] = CRGB{j, k, l}; FastLED.show();    
+
+    watch = 500; while(watch);
+}
+
+
+
 
 void setup() 
 {
@@ -216,8 +228,9 @@ void setup()
         return;
     }
 
-//  Werte noch selbst speichern - das komt dann später weg !!! 
+    //  Werte noch selbst speichern - das komt dann später weg !!! 
     preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
+    
     getSet();
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
@@ -235,9 +248,23 @@ void setup()
     else 
     {
         mode = MODE_BT;
-    }
-   
 
+        autonomous = TRUE;
+        pinMode(TEST_PIN_RX2, OUTPUT);
+        digitalWrite(TEST_PIN_RX2, HIGH);
+        if (digitalRead(TEST_PIN_TX2) == LOW) autonomous = FALSE;
+        digitalWrite(TEST_PIN_RX2, LOW);
+        if (digitalRead(TEST_PIN_TX2) == HIGH) autonomous = FALSE;
+        digitalWrite(TEST_PIN_RX2, HIGH);
+        if (digitalRead(TEST_PIN_TX2) == LOW) autonomous = FALSE;
+        digitalWrite(TEST_PIN_RX2, LOW);
+        if (digitalRead(TEST_PIN_TX2) == HIGH) autonomous = FALSE;
+    }
+
+
+
+
+   
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
     timerAlarmWrite(timer, 100, true);  // 0.1 msec -> 100
@@ -252,10 +279,8 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
-
     
     drive(0, 0);
-
     onBoardLedOff();
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
@@ -265,11 +290,15 @@ void setup()
     isMFSavailable = !initMFS(); // init liefert 0 falls der Baustein initialisiert werden konnte.
     
     printf("\n______________________________________________________________________________________\n");
+    printf("\n                        %s      %s      mode: %s\n", 
+        robName, (autonomous == TRUE) ? "autonomes System": "", 
+                            (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
+    printf("______________________________________________________________________________________\n");
     printf("battery: %1.3f\n", batteryLevel);
     printf("motorSystem: %d\n", motorSys);
     printf("minSpeed %d\n", minSpeed);
-    printf("ssid: %s\n", ssidWord);
-    printf("password: %s\n", password);
+    //printf("ssid: %s\n", ssidWord);
+    //printf("password: %s\n", password);
     printf("ps4-System: %d %s\n", ps, (ps == PS4_GRAY) ? "gray" : (ps == PS4_RED) ? "red" : "blue");
     printf("xMin %d xMax %d yMin %d yMax %d\n", xMin, xMax, yMin, yMax);
     printf("magneticfield-sesor: (MFS) available: %s\n", (isMFSavailable) ? "yes":"no");
@@ -284,14 +313,9 @@ void setup()
     oled.setCursor(20, 0);
     oled.print(robName);
 
-    // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
-    // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
-    // oled.drawCircle(64, 32, 31, WHITE);
-
     oled.display();
 
-
-    // scanI2CBus();  for tests  um herauszufinden welch devices vorhanden sind
+    if (mode == MODE_MENU) scanI2CBus();  // test: um herauszufinden welch devices vorhanden sind
 
     FastLED.addLeds<SK9822, DATA_PIN, CLOCK_PIN, RGB>(leds, NUM_LEDS);
 
@@ -302,26 +326,44 @@ void setup()
 
     FastLED.show();
 
+
+    if (autonomous)
+    {
+        for(;;)
+        {
+             f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00);
+             f(0xff, 0xff, 0x00,   0x00, 0xff, 0xff,   0xff, 0x00, 0xff,   0x00, 0x00, 0x00);
+             f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff);
+             f(0x00, 0x00, 0x00,   0xff, 0xff, 0x00,   0x00, 0xff, 0xff,   0xff, 0x00, 0xff);
+             f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00);
+             f(0xff, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0xff, 0x00,   0x00, 0xff, 0xff);
+             f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00);
+             f(0x00, 0xff, 0xff,   0xff, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0xff, 0x00);
+
+
+}         
+
+    }
+
     switch (mode)   // Init Phase: 
     {
         case MODE_PS4:
 
             printf("ps4 mode!\n");
-            clearBtClassicBonds();        // *** ALTEN PAIRING-MÜLL LÖSCHEN ***
-            watch = 200; while(watch); // wait 0.2 sec
 
+            watch = 200; while(watch); // wait 0.2 sec
 
             connected = FALSE; 
             psMode = DUAL_MODE;
 
             switch (ps)
             {
-                case PS4_BLUE:  ok = PS4.begin("10:20:30:40:50:60"); break;  // mit 60 funkts nicht - warum? 
                 case PS4_RED:   ok = PS4.begin("10:20:30:40:50:61"); break;
                 case PS4_GRAY:  ok = PS4.begin("10:20:30:40:50:62"); break;
+                case PS4_BLUE:  ok = PS4.begin("10:20:30:40:50:60"); break;  
             }
-            if (!ok) printf("ps4 failed!\n");
-            else printf("ps4 started\n");
+
+            if (!ok) printf("ps4 failed!\n"); else printf("ps4 correct initialized and started\n");
 
             printBtMac();
 
@@ -340,6 +382,15 @@ void setup()
             printf("BT mode\n");
             drive(0,0);
 
+            if (autonomous)
+            {
+                leds[0] = CRGB{255, 255, 0}; // R B G
+                leds[1] = CRGB{255, 255, 0};
+                leds[2] = CRGB{0, 0, 0};
+                leds[3] = CRGB{0, 0, 0};
+                FastLED.show();
+            }
+
         break;
 
         case MODE_MENU:
@@ -352,7 +403,6 @@ void setup()
             leds[1] = CRGB{255, 255, 255};
             leds[2] = CRGB{255, 255, 255};
             leds[3] = CRGB{255, 255, 255};
-
             FastLED.show();
 
         /*  Motorsystem wählen: */
@@ -374,6 +424,13 @@ void setup()
             motorSys = msys;    
             drive(0,0);    
             printStored();
+
+            leds[0] = CRGB{0, 0, 0}; // R B G
+            leds[1] = CRGB{0, 0, 0};
+            leds[2] = CRGB{0, 0, 0};
+            leds[3] = CRGB{0, 0, 0};
+            FastLED.show();
+
             while (digitalRead(TEST_PIN_TX2) == HIGH);
             drive(0,0);
 
@@ -390,32 +447,18 @@ void setup()
                 count--;
             }
 
-            leds[0] = CRGB{0, 255, 255}; // R B G
-            leds[1] = CRGB{0, 255, 255};
-            leds[2] = CRGB{0, 255, 255};
-            leds[3] = CRGB{0, 255, 255};
-
-            FastLED.show();
-
             watch = 500; while (watch);
-
-            count = 155; 
+            count = 200; 
             prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
-
-
+printf("0");
             while (count < 256) //255 letzter Wert!
             {
+printf("1"); 
                 drive(count, -count);
                 watch = 300; while (watch);
                 count += 5;
                 calibrateMFS();
             }
-
-            leds[0] = CRGB{255, 0, 255}; // R B G
-            leds[1] = CRGB{255, 0, 255};
-            leds[2] = CRGB{255, 0, 255};
-            leds[3] = CRGB{255, 0, 255};
-            FastLED.show();
 
             count = 255;
             impulsCntL = 0;
@@ -423,44 +466,36 @@ void setup()
             last_impulsCntL = -2; 
             last_impulsCntR = -2;
 
-            while (count > 30)
+            while ((count > 100))  // Timeout integrated!
             {
+
                 if (((impulsCntL - last_impulsCntL) > 1) && 
                     ((impulsCntR - last_impulsCntR) > 1)     )
                 {
-
+                    //printf("# %d %d \n", (impulsCntL - last_impulsCntL), (impulsCntR - last_impulsCntR));
                     last_impulsCntL = impulsCntL;
                     last_impulsCntR = impulsCntR;
-
                     drive(-count, count);
                     calibrateMFS();
                     printSpeedMin(count);
                     impulsFlagL = impulsFlagR = FALSE;
-                    watch = 200; while (watch);
-                    if (count > 200) count -= 3; 
-                    else if (count > 150) count -= 5; 
-                    else if (count > 120) count -= 2; 
+                    watch = 50; while (watch);  // kürzer !
+                    if (count > 200) count -= 4; 
+                    else if (count > 150) count -= 3;
+                    else if (count > 120) count -= 2;
                     else count--;
-                    //printf("count min : %d %d %d %d %d\n", count, impulsCntL, impulsCntR,
-                    //    impulsCntL - last_impulsCntL, impulsCntR - last_impulsCntR);
-                }
-                else
-                {
-                    minSpeed = count; 
-                    printSpeedMin(minSpeed);
-                    storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
-                    //printf("count min : %d \n", count);
 
-                    leds[0] = CRGB{0, 0, 0}; // R B G
-                    leds[1] = CRGB{0, 0, 0};
-                    leds[2] = CRGB{0, 0, 0};
-                    leds[3] = CRGB{0, 0, 0};
-                    FastLED.show();
-
-                    count = 0; 
+                    // for tests:
+                    printf("count min : %d %d %d %d %d\n", count, impulsCntL, impulsCntR,
+                        impulsCntL - last_impulsCntL, impulsCntR - last_impulsCntR);
                 }
             }
-            
+
+            minSpeed = count; 
+            printSpeedMin(minSpeed);
+            storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
+
+
             drive(0,0);
             
             storeInt2EEPROM(xMin, EEPROM_MFS_MINX);     
@@ -468,18 +503,18 @@ void setup()
             storeInt2EEPROM(yMin, EEPROM_MFS_MINY);     
             storeInt2EEPROM(yMax, EEPROM_MFS_MAXY);     
 
-
             watch = 500; while (watch); 
-            watch = 3000; while (watch)
+            watch = 5000; while (watch)
             {
                 angle = getMFS_Angle() - 83.;  // bp str.4
-                //printf("%d\n", watch);
                 printComp(angle);
             }
             
-        // Controller: 
+            // Controller: 
+
 
             ps  = PS4_GRAY; 
+
 
             while (digitalRead(TEST_PIN_TX2) == LOW)
             {
@@ -493,9 +528,44 @@ void setup()
 
             printStored();
 
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten, bis die Leitung wieder gesteckt ist! 
+        /*  rob name wählen: */
+
+            msys = 0;  // here: "msys" =  my system name 
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                msys++; if (msys > 7) msys = 0;
+                
+                sprintf(text,"rob%c",msys + '0');
+                printRobName(text);
+
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            storeStr2EEPROM(text, EEPROM_ROB_NAME);
+            printStored();
+
+            robName = readFromEEPROM(EEPROM_ROB_NAME);
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH);            // warten, bis die Leitung wieder gesteckt ist! 
+
+
+            printClearQ();
+
+            while (digitalRead(TEST_PIN_TX2) == LOW); // wartet ob die Leitung wieder gzogen wird. 
+
+
+            clearBtClassicBonds();   // für Testzwecke -> letzter Menüpunkt
+
+            printCleared();
+            printf("clearClassicBonds - done");
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH);            // warten, bis die Leitung wieder gesteckt ist! 
+
+
         break; 
     }
-
 
 }
 
@@ -614,6 +684,7 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                     {
                         psMode = (psMode == DUAL_MODE) ? JOY_STICK : DUAL_MODE;
                         squareMode = FALSE;  
+                        switchLedsOn(ps, squareMode);
                         if (psMode == JOY_STICK) onBoardLedOff();
                         if (psMode == DUAL_MODE) onBoardLedOn();
 
@@ -625,6 +696,8 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                     {
                         psMode = (psMode == DUAL_MODE) ? JOY_STICK : DUAL_MODE;
                         squareMode = TRUE;  
+                        switchLedsOn(ps, squareMode);
+
                         if (psMode == JOY_STICK) onBoardLedOff();
                         if (psMode == DUAL_MODE) onBoardLedOn();
 
@@ -646,17 +719,7 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                         onBoardLedOn();
                         printf("connected!\n");
 
-                        switch (ps)
-                        {
-                            case PS4_GRAY: leds[0] = CRGB{0, 0, 255}; leds[1] = CRGB{0, 0, 255}; break;
-                            case PS4_RED:  leds[0] = CRGB{255, 0, 0}; leds[1] = CRGB{255, 0, 0}; break;
-                            case PS4_BLUE: leds[0] = CRGB{0, 255, 0}; leds[1] = CRGB{0, 255, 0}; break;
-                        }   
-
-                        leds[2] = CRGB{0, 0, 0};
-                        leds[3] = CRGB{0, 0, 0};
-
-                        FastLED.show();
+                        switchLedsOn(ps, squareMode);
                     }
                 }
             }
@@ -686,14 +749,10 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                 {
                     c = BT.read();
 
-                    //BT.write((uint8_t)c);
-                    //Serial.write((uint8_t)c);
-
                     if (c == '\n' || c == '\r') 
                     {
                         rxBuf[rxPos] = '\0';
                         rxPos = 0;
-                         // 1) RESET-Kommando
         
                          if (strcmp(rxBuf, "#RESET") == 0)
                         {
@@ -701,7 +760,10 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                             
                             vLSum = vRSum = 0;
 
+                            // hier könnte man den Autopiloten ein ausschalten!
+
                     continue;   // fertig mit dieser Zeile
+
                         }
 
                         // Format: Jx;y   z.B. J-10;25
@@ -710,16 +772,15 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                             int x, y;
                             if (sscanf(&rxBuf[1], "%d;%d", &x, &y) == 2) 
                             {
-                                joyX = x;    // hier hast du die Joystickwerte
+                                joyX = x;    
                                 joyY = y;
-                    // Debug:
-                                //printf("Joystick: X=%d Y=%d\n", joyX, joyY);
 
                                 vx = joyX;
                                 vy = joyY;
+                                /*
                                 wl = atan(vy/+vx) * 180 / M_PI;
                                 wr = atan(vy/-vx) * 180 / M_PI;
-                            
+                           
                                 
                                 if ((vx >= 0) && (vy >= 0)) { dirL = dirR = 1; wr += 180; }
                                 if ((vx <  0) && (vy >= 0)) { dirL = dirR = 1; wl += 180; }
@@ -728,36 +789,45 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                                 
                                 speedR = speedL = sqrt(vx*vx + vy*vy)*sqrt(2);
 
+                                */
+
+                                vy = -vy;
+
+                                vy *= 2.;
+
+                                if (vx > 0) vy -= vx; else vy += vx;
+
                                 if ((abs(vx) > 7) || (abs(vy) > 7))
                                 {
-                                    // speedL = PS4.R2Value();
-                                    if (wl > 0)
-                                    {
-                                        speedL = (speedL/256.)*((255 - minSpeed)* (wl/180.)) + minSpeed;
-                                    }
-                                    else
-                                    {
-                                        speedL = (speedL/256.)*((255 - minSpeed)*((-wl)/180.)) + minSpeed;
-                                    }
+                                    speedL = speedR = vy;
 
-                                    if (wr > 0)
+                                    if(speedL > 0)
                                     {
-                                        speedR = (speedR/256.)*((255 - minSpeed)*(wr/180.)) + minSpeed;
+                                        dirL = +1;
                                     }
                                     else
                                     {
-                                        speedR = (speedR/256.)*((255 - minSpeed)*((-wr)/180.)) + minSpeed;
+                                        speedL = -speedL;
+                                        dirL = -1;
                                     }
-                                }
-                                else 
-                                {
-                                    speedL = speedR = 0;
+                            
+                                    if(speedR > 0)
+                                    {
+                                        dirR = +1;
+                                    }
+                                    else
+                                    {
+                                        speedR = -speedR;
+                                        dirR = -1;
+                                    }
                                 }
                             
 //                                printf("BT JOY:  wl %.1f wr %.1f speedL %d speedR %d dirL %d  dirR %d\n", 
 //                                    wl, wr, speedL, speedR, dirL, dirR);
 
                                 drive(dirL * speedL,  dirR * speedR);
+                                printf("BT JOY:  vx %f vy %f speedL %d speedR %d dirL %d  dirR %d\n", 
+                                    vx, vy, speedL, speedR, dirL, dirR);
 
 
                             }
@@ -796,36 +866,47 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                 BT.printf("%6.2f;%6.2f;%d;%d;%6.2f\n", distance, angle, vLSum, vRSum, batteryLevel);
                 //printf("%6.2f;%6.2f;%d;%d;%6.2f\n", distance, angle, vLSum, vRSum, batteryLevel);
 
-                /*  derzeit brauchen wir nicht zu fahren! 
 
-                if(stateBT == DRIVE)
+                if (autonomous)
                 {
-                    drive(255,255);
-                    leds[0] = CRGB{0, 0, 255}; // R B G
-                    leds[1] = CRGB{0, 0, 255};
-                    leds[2] = CRGB{0, 0, 255};
-                    leds[3] = CRGB{0, 0, 255};
+                    if(stateBT == DRIVE)
+                    {
+                        dirL = dirR = 1; 
+                        
 
-                    FastLED.show();
+                        leds[0] = CRGB{255, 255, 0}; // R B G
+                        leds[1] = CRGB{255, 255, 0};
+                        leds[2] = CRGB{0, 0, 255};
+                        leds[3] = CRGB{0, 0, 255};
+
+                        FastLED.show();
+
+                        
+                        drive(255,255);
+                        if (distance <= 10) {stateBT = ROTATE; drive(0,0);}
+                        else if (distance <= 15) drive(100,100);
+                        else if (distance <= 20) drive(120,120);
+                        else if (distance <= 25) drive(150,150);
+                        else if (distance <= 30) drive(200,200);
+                        else if (distance <= 40) drive(220,220);
+                        else if (distance <= 60) drive(250,250);
+                       
 
 
-                    if (distance <= 20) stateBT = ROTATE;
+                    }
+                    else
+                    {
+                        drive(120, -120);
+                        if (distance >= 30) stateBT = DRIVE;
 
+                        leds[0] = CRGB{255, 0, 0}; // R B G
+                        leds[1] = CRGB{255, 0, 0};
+                        leds[2] = CRGB{255, 0, 0};
+                        leds[3] = CRGB{255, 0, 0};
+
+                        FastLED.show();
+                    }
                 }
-                else
-                {
-                    drive(255, -255);
-                    if (distance >= 30) stateBT = DRIVE;
-
-                    leds[0] = CRGB{255, 0, 0}; // R B G
-                    leds[1] = CRGB{255, 0, 0};
-                    leds[2] = CRGB{255, 0, 0};
-                    leds[3] = CRGB{255, 0, 0};
-
-                    FastLED.show();
-
-                }
-                */
             }
 
         break;
@@ -834,6 +915,35 @@ int joyX = 0, joyY = 0;   // -128 .. +128
             // do nothing! 
         break;
     }
+}
+
+void switchLedsOn(int ps, int sMode)
+{
+    if (sMode)
+    {
+        switch (ps)
+        {
+            case PS4_GRAY: leds[2] = CRGB{0, 0, 255}; leds[3] = CRGB{0, 0, 255}; break;
+            case PS4_RED:  leds[2] = CRGB{255, 0, 0}; leds[3] = CRGB{255, 0, 0}; break;
+            case PS4_BLUE: leds[2] = CRGB{0, 255, 0}; leds[3] = CRGB{0, 255, 0}; break;
+        }   
+        leds[0] = CRGB{0, 0, 0};
+        leds[1] = CRGB{0, 0, 0};
+    }
+    else
+    {
+        switch (ps)
+        {
+            case PS4_GRAY: leds[0] = CRGB{0, 0, 255}; leds[1] = CRGB{0, 0, 255}; break;
+            case PS4_RED:  leds[0] = CRGB{255, 0, 0}; leds[1] = CRGB{255, 0, 0}; break;
+            case PS4_BLUE: leds[0] = CRGB{0, 255, 0}; leds[1] = CRGB{0, 255, 0}; break;
+        }   
+        leds[2] = CRGB{0, 0, 0};
+        leds[3] = CRGB{0, 0, 0};
+    }
+
+    FastLED.show();
+
 }
 
 
@@ -993,6 +1103,13 @@ void printPs4(int ps)
     oled.display();
 }
 
+void printRobName(const String& name)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    oled.setCursor(20, 32);
+    oled.print(name);
+    oled.display();
+}
 
 void printMotorSystem(int msys)
 {
@@ -1010,6 +1127,22 @@ void printStored(void)
     oled.display();
 }
 
+void printClearQ(void)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"clear ? ");
+    oled.setCursor(20, 48);
+    oled.print(text);
+    oled.display();
+}
+void printCleared(void)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"cleared !");
+    oled.setCursor(20, 48);
+    oled.print(text);
+    oled.display();
+}
 
 
 void printData(void)
@@ -1144,10 +1277,10 @@ String readFromEEPROM(int address)
 
 void preSet(void)
 {
-    storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
-    storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
-    storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR); // das sind noch alte Daten... 
-    storeStr2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
+    //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
+    //storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
+    //storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR); // das sind noch alte Daten... 
+    //storeStr2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
 }
 
 void getSet(void)
@@ -1248,6 +1381,9 @@ void clearBtClassicBonds()
     }
   }
   free(list);
+  btStop();               // Arduino-Wrapper, stoppt Classic + BLE
+  delay(100);
+  btStart();  
 }
 
 //******************************************************************
