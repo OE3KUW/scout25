@@ -143,6 +143,7 @@ int psMode;
 int msys;
 int stateBT = DRIVE;
 int isMFSavailable = FALSE;
+int mfs = 0x1e;
 
 CRGB leds[NUM_LEDS];
 
@@ -219,6 +220,8 @@ void setup()
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(TEST_PIN_RX2, INPUT_PULLUP);
     pinMode(TEST_PIN_TX2, INPUT_PULLUP);
+
+    drive(0, 0);
 
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // deactiviere die Brownout Detection !!!
 
@@ -340,9 +343,7 @@ void setup()
              f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00);
              f(0x00, 0xff, 0xff,   0xff, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0xff, 0x00);
 
-
-}         
-
+        }         
     }
 
     switch (mode)   // Init Phase: 
@@ -450,10 +451,10 @@ void setup()
             watch = 500; while (watch);
             count = 200; 
             prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
-printf("0");
+
             while (count < 256) //255 letzter Wert!
             {
-printf("1"); 
+
                 drive(count, -count);
                 watch = 300; while (watch);
                 count += 5;
@@ -951,18 +952,57 @@ void switchLedsOn(int ps, int sMode)
 
 int initMFS(void)
 {
-  // RETURN 0 ... success; 2 kein device gfunden; 3 Fehler bei der Übertragung der Daten an den Baustein  
-  Wire.beginTransmission(MFS);
-  Wire.write(0x00); Wire.write(0x70); // Konfiguration A
-  Wire.endTransmission();
+int ret = 0;   
+ 
+// RETURN: 
+// 0 success; 
+// 2 kein device gfunden; 
+// 3 Fehler bei der Übertragung der Daten an den Baustein  
 
-  Wire.beginTransmission(MFS);
-  Wire.write(0x01); Wire.write(0xA0); // Gain höher setzen
-  Wire.endTransmission();
+    Wire.beginTransmission(mfs);
+    Wire.write(0x00); Wire.write(0x70); // Konfiguration A
+    Wire.endTransmission();
 
-  Wire.beginTransmission(MFS);
-  Wire.write(0x02); Wire.write(0x00); // Continuous mode
-  return Wire.endTransmission();
+    Wire.beginTransmission(mfs);
+    Wire.write(0x01); Wire.write(0xA0); // Gain höher setzen
+    Wire.endTransmission();
+
+    Wire.beginTransmission(mfs);
+    Wire.write(0x02); Wire.write(0x00); // Continuous mode
+    ret = Wire.endTransmission();
+
+    if (ret != 0)
+    {
+        mfs = 0x0d;
+
+        // dann gibt es vielleicht noch den Baustein, der auf =X0d antwortet. 
+  
+        Wire.beginTransmission(mfs);
+        Wire.write(0x0A); Wire.write(0x80); // Reset Register und Soft Reset
+        Wire.endTransmission();
+
+        delay(10);
+        
+        // Control Register 1
+        Wire.beginTransmission(mfs);
+        Wire.write(0x09);
+        Wire.write(0b00011101);
+        // 0b00 01 11 01
+        // |  |  |  |
+        // |  |  |  +--> Mode = Continuous (01)
+        // |  |  +-----> ODR = 200 Hz (11)
+        // |  +--------> Range = ±8 Gauss (01)
+        // +-----------> OSR = 512 (00)
+        Wire.endTransmission();
+
+        // Control Register 2
+        Wire.beginTransmission(mfs);
+        Wire.write(0x0A);
+        Wire.write(0x01);   // Roll Pointer
+        ret = Wire.endTransmission();
+    }
+
+    return ret;
 }
 
 void prepareMFSCalibrationSystem(void)
@@ -976,18 +1016,45 @@ void readRawMFS(int16_t* x, int16_t* y, int16_t* z)
 {
     if (isMFSavailable)
     {
-
-        Wire.beginTransmission(MFS);
-        Wire.write(0x03);
-        Wire.endTransmission(false); 
-
-        Wire.requestFrom(MFS, 6); 
-        if (Wire.available() == 6) 
+        if (mfs == MFS)  // 0x1E: 
         {
-            *x = Wire.read() << 8; *x |= Wire.read(); 
-            *z = Wire.read() << 8; *z |= Wire.read(); 
-            *y = Wire.read() << 8; *y |= Wire.read(); 
-        } 
+            Wire.beginTransmission(MFS);
+            Wire.write(0x03);
+            Wire.endTransmission(false); 
+
+            Wire.requestFrom(MFS, 6); 
+            if (Wire.available() == 6) 
+            {
+                *x = Wire.read() << 8; *x |= Wire.read(); 
+                *z = Wire.read() << 8; *z |= Wire.read(); 
+                *y = Wire.read() << 8; *y |= Wire.read(); 
+            } 
+        }
+        else
+        {
+            Wire.beginTransmission(mfs);
+            Wire.write(0x00);
+            Wire.endTransmission(false);
+    
+            Wire.requestFrom(mfs, 6);
+            if (Wire.available() == 6)
+            {
+                uint8_t xl = Wire.read();
+                uint8_t xh = Wire.read();
+                uint8_t yl = Wire.read();
+                uint8_t yh = Wire.read();
+                uint8_t zl = Wire.read();
+                uint8_t zh = Wire.read();
+
+                *x = (int16_t)((xh << 8) | xl);
+                *y = (int16_t)((yh << 8) | yl);
+                *z = (int16_t)((zh << 8) | zl);
+            }
+            else
+            {
+                *x = *y = *z = 0;
+            }
+        }
     }
     else
     {
