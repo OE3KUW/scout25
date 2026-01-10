@@ -5,6 +5,14 @@
                                                    қuran nov 2025
 ******************************************************************/
 #include <Arduino.h>
+// ROS:
+#include <micro_ros_arduino.h>
+#include <rcl/rcl.h>    
+#include <rclc/rclc.h>
+#include <rclc/executor.h>
+#include <std_msgs/msg/int32.h> 
+#include <std_msgs/msg/int32_multi_array.h> 
+// 
 #include <Wire.h>
 #include <EEPROM.h>
 #define FASTLED_ALL_PINS_HARDWARE_SPI
@@ -23,6 +31,19 @@
 #define FALSE                           false
 #define H                               HIGH
 #define L                               LOW
+
+// WLAN & Agent:
+/**/
+#define WIFI_SSID                       "A1-7DC69BC1"
+#define WIFI_PASS                       "HvCtieELY4tVFs"
+#define AGENT_IP                        "10.0.0.229"    // IP vom Pi400 eth0
+/*
+#define WIFI_SSID                       "HTL-WLAN-IoT"
+#define WIFI_PASS                       "HTL2IoT!"
+#define AGENT_IP                        "10.115.61.237" // IP vom Pi400 wlan0
+*/
+#define AGENT_PORT                      8888
+
 
 #define WAIT_ONE_SEC                    10000
 #define WAIT_250_MSEC                   2500
@@ -83,6 +104,19 @@
 #define DRIVE                           1   
 #define ROTATE                          0
 
+// micro-ROS Variablen:
+rcl_allocator_t    allocator;
+rclc_support_t     support;
+rcl_node_t         node;
+rcl_subscription_t subscriber;
+rcl_publisher_t    publisher;
+rclc_executor_t    executor;
+ 
+std_msgs__msg__Int32 out_msg;   
+std_msgs__msg__Int32MultiArray speed_msg;   // robId, speedL, speedR
+static int32_t speed_data_buffer[3]; 
+
+
 hw_timer_t *timer = NULL;
 void IRAM_ATTR myTimer(void);
 volatile int watch = 0; 
@@ -108,6 +142,7 @@ volatile int prell = 0;
 
 volatile float batteryLevel = 0.;
 volatile int motorSys = 0;
+int robId;
 String robName;
 String IntVal;
 String motorSysFromEEPROM = "";
@@ -180,6 +215,32 @@ void printClearQ(void);
 void printCleared(void);
 
 void switchLedsOn(int ps, int sMode);
+//void speed_callback(const void * msgin);
+
+// Callback Funktion:
+
+void speed_callback(const void * msgin)
+{
+  	const std_msgs__msg__Int32MultiArray * msg = 
+	    (const std_msgs__msg__Int32MultiArray *) msgin;
+
+	if (msg->data.size < 3) {  
+    	Serial.print("MultiArray zu kurz, size=");
+    	Serial.println((int)msg->data.size);
+    	return;
+  	}
+
+    int Id = msg->data.data[0];        // robId
+  	int speedL = msg->data.data[1];    // erwartet -255..255
+  	int speedR = msg->data.data[2];    // erwartet -255..255
+
+    if ((Id == robId) || Id == 0)  // Id == 0: command for every! rob 
+    {
+        drive(speedL, speedR);
+    }
+}
+
+
 
 void printBtMac()
 {
@@ -197,11 +258,7 @@ void f(unsigned char a, unsigned char b, unsigned char c,  unsigned char d, unsi
     leds[1] = CRGB{d, e, f}; 
     leds[2] = CRGB{g, h, i}; 
     leds[3] = CRGB{j, k, l}; FastLED.show();    
-
-    watch = 500; while(watch);
 }
-
-
 
 
 void setup() 
@@ -230,6 +287,10 @@ void setup()
         Serial.println("EEPROM initialisieren fehlgeschlagen!");
         return;
     }
+
+     // micro-ROS Transport über WLAN:
+  	set_microros_wifi_transports( (char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
+	delay(2000);
 
     //  Werte noch selbst speichern - das komt dann später weg !!! 
     preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
@@ -264,9 +325,6 @@ void setup()
         if (digitalRead(TEST_PIN_TX2) == HIGH) autonomous = FALSE;
     }
 
-
-
-
    
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
@@ -275,14 +333,70 @@ void setup()
 
     attachInterrupt(digitalPinToInterrupt(impulsR), impuls_R_isr, FALLING);
     attachInterrupt(digitalPinToInterrupt(impulsL), impuls_L_isr, FALLING);
+
+    // ROS: 
     
-    oneSecFlag = FALSE; 
-    qSecFlag = FALSE;
-    tenMSecFlag = FALSE;
-    impulsFlagL = FALSE;  
-    impulsFlagR = FALSE;  
-    impulsCntL = impulsCntR = 0;
+ 
+  	allocator = rcl_get_default_allocator();
+  	rcl_ret_t rc;
+ 
+    // Support
+  	rc = rclc_support_init(
+    	&support, 
+		0, 
+		NULL, 
+		&allocator);
     
+	if (rc != RCL_RET_OK) { Serial.println("support_init ERROR"); return; }
+ 
+    // Node
+     rc = rclc_node_init_default(
+      	&node,
+      	"esp32_motor_robot",
+      	"",
+      	&support);
+ 
+  	if (rc != RCL_RET_OK) { Serial.println("node_init ERROR"); return; }
+
+	// Publisher:
+	rc = rclc_publisher_init_default(
+    	&publisher,
+    	&node,
+    	ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    	"esp_value");
+	if (rc != RCL_RET_OK) { Serial.println("publisher_init ERROR"); return; }
+
+
+ 	// Message init + Buffer setzen (WICHTIG für MultiArray)
+	std_msgs__msg__Int32MultiArray__init(&speed_msg); //###
+
+	speed_msg.data.data = speed_data_buffer; 
+	speed_msg.data.capacity = 3;  
+	speed_msg.data.size = 0;  
+  	
+	// Subscriber auf "cmd_speed" (std_msgs/Int32)
+  	rc = rclc_subscription_init_default(
+      	&subscriber,
+      	&node,
+//###   ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+      	ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray),
+      	"cmd_speed");
+  
+	if (rc != RCL_RET_OK) { Serial.println("subscription_init ERROR"); return; }
+ 
+    // Executor (1 Subscription):
+    rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
+  
+	if (rc != RCL_RET_OK) { Serial.println("executor_init ERROR"); return; }
+ 
+    rc = rclc_executor_add_subscription(
+      	&executor,
+      	&subscriber,
+      	&speed_msg,
+      	&speed_callback,
+      	ON_NEW_DATA);
+  	if (rc != RCL_RET_OK) { Serial.println("executor_add_sub ERROR"); return; }
+
     drive(0, 0);
     onBoardLedOff();
 
@@ -290,12 +404,25 @@ void setup()
 
     watch = 100; while (watch); // 100 ms wait time
 
+  	printf("micro-ROS Motor init DONE\n\n");
+
+    // ROS ---------------------
+
+    oneSecFlag = FALSE; 
+    qSecFlag = FALSE;
+    tenMSecFlag = FALSE;
+    impulsFlagL = FALSE;  
+    impulsFlagR = FALSE;  
+    impulsCntL = impulsCntR = 0;
+    
+
     isMFSavailable = !initMFS(); // init liefert 0 falls der Baustein initialisiert werden konnte.
     
     printf("\n______________________________________________________________________________________\n");
-    printf("\n                        %s      %s      mode: %s\n", 
-        robName, (autonomous == TRUE) ? "autonomes System": "", 
-                            (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
+    printf("\n                        %s  robId %d    %s      mode: %s\n", 
+        robName, robId,
+        (autonomous == TRUE) ? "autonomes System": "", 
+        (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
     printf("______________________________________________________________________________________\n");
     printf("battery: %1.3f\n", batteryLevel);
     printf("motorSystem: %d\n", motorSys);
@@ -333,17 +460,36 @@ void setup()
 
     if (autonomous)
     {
+        int i = 0;
+        int msg = 0; 
+        int ret;
+
         for(;;)
         {
-             f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00);
-             f(0xff, 0xff, 0x00,   0x00, 0xff, 0xff,   0xff, 0x00, 0xff,   0x00, 0x00, 0x00);
-             f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff);
-             f(0x00, 0x00, 0x00,   0xff, 0xff, 0x00,   0x00, 0xff, 0xff,   0xff, 0x00, 0xff);
-             f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00);
-             f(0xff, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0xff, 0x00,   0x00, 0xff, 0xff);
-             f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00);
-             f(0x00, 0xff, 0xff,   0xff, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0xff, 0x00);
+            i++; if (i > 3) i = 0;
+            switch(i) // sobald ein die eigene robId empfangen wird - könnte hier umgeschalten werden
+                      // das ist in der Funktion cmd_speed
+            {
+    case 0: f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00); break;
+    case 1: f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff); break;
+    case 2: f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00); break;
+    case 3: f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00); break;
+            } 
+            watch = 2000; 
+            while(watch)
+            {
+                // autonomous loop:
+                
+  	            rclc_executor_spin_some(&executor, RCL_MS_TO_NS(50)); // 50
 
+                if (oneSecFlag)
+	            {
+		            oneSecFlag = FALSE;
+		            out_msg.data = (int32_t)msg; msg++;
+		            ret = rcl_publish(&publisher, &out_msg, NULL);
+		            if (ret) printf("publishing returns %d\n", ret);
+	            }
+            }
         }         
     }
 
@@ -1354,7 +1500,8 @@ void preSet(void)
 void getSet(void)
 {
     byte high, low;
-    robName = readFromEEPROM(EEPROM_ROB_NAME);
+    robName = readFromEEPROM(EEPROM_ROB_NAME); 
+    robId = (char)robName[3] - '0';
     minSpeed = getIntFromEEPROM(EEPROM_MIN_SPEED);
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
     motorSys = (char)motorSysFromEEPROM[0] - '0';
