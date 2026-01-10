@@ -304,7 +304,8 @@ void setup()
     //printf("password: %s\n", password);
     printf("ps4-System: %d %s\n", ps, (ps == PS4_GRAY) ? "gray" : (ps == PS4_RED) ? "red" : "blue");
     printf("xMin %d xMax %d yMin %d yMax %d\n", xMin, xMax, yMin, yMax);
-    printf("magneticfield-sesor: (MFS) available: %s\n", (isMFSavailable) ? "yes":"no");
+    printf("magneticfield-sesor: (MFS) available: %s 0x%02X\n", 
+          (isMFSavailable) ? "yes":"no", (isMFSavailable) ? mfs : 0);
     printf("______________________________________________________________________________________\n");
     printf("start!\n");
     
