@@ -5,6 +5,10 @@
                                                    қuran nov 2025
 ******************************************************************/
 #include <Arduino.h>
+#include <Wire.h>
+#include <EEPROM.h>
+#define FASTLED_ALL_PINS_HARDWARE_SPI
+#include <FastLED.h>
 // ROS:
 #include <micro_ros_arduino.h>
 #include <rcl/rcl.h>    
@@ -13,10 +17,7 @@
 #include <std_msgs/msg/int32.h> 
 #include <std_msgs/msg/int32_multi_array.h> 
 // 
-#include <Wire.h>
-#include <EEPROM.h>
-#define FASTLED_ALL_PINS_HARDWARE_SPI
-#include <FastLED.h>
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <PS4Controller.h>
@@ -33,15 +34,16 @@
 #define L                               LOW
 
 // WLAN & Agent:
-/**/
+/** /
 #define WIFI_SSID                       "A1-7DC69BC1"
 #define WIFI_PASS                       "HvCtieELY4tVFs"
 #define AGENT_IP                        "10.0.0.229"    // IP vom Pi400 eth0
-/*
+/*/
 #define WIFI_SSID                       "HTL-WLAN-IoT"
 #define WIFI_PASS                       "HTL2IoT!"
 #define AGENT_IP                        "10.115.61.237" // IP vom Pi400 wlan0
-*/
+//#define AGENT_IP                        "172.17.0.1" // IP vom Pi400 wlan0
+/**/
 #define AGENT_PORT                      8888
 
 
@@ -245,7 +247,7 @@ void speed_callback(const void * msgin)
 void printBtMac()
 {
     const uint8_t* mac = esp_bt_dev_get_address();
-    printf("ESP32 BT MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+     ("ESP32 BT MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
@@ -279,6 +281,7 @@ void setup()
     pinMode(TEST_PIN_TX2, INPUT_PULLUP);
 
     drive(0, 0);
+    Serial.println("start scout25");
 
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // deactiviere die Brownout Detection !!!
 
@@ -288,9 +291,6 @@ void setup()
         return;
     }
 
-     // micro-ROS Transport über WLAN:
-  	set_microros_wifi_transports( (char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
-	delay(2000);
 
     //  Werte noch selbst speichern - das komt dann später weg !!! 
     preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
@@ -335,78 +335,88 @@ void setup()
     attachInterrupt(digitalPinToInterrupt(impulsL), impuls_L_isr, FALLING);
 
     // ROS: 
+    if (autonomous)
+    {
+        // start ROS!
+
+             // micro-ROS Transport über WLAN:
+             
+      	set_microros_wifi_transports( (char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
+	    delay(2000);
+
+
+  	    allocator = rcl_get_default_allocator();
+  	    rcl_ret_t rc;
+ 
+        // Support
+  	    rc = rclc_support_init(
+    	    &support, 
+		    0, 
+		    NULL, 
+		    &allocator);
     
+	    if (rc != RCL_RET_OK) { Serial.println("support_init ERROR"); return; }
  
-  	allocator = rcl_get_default_allocator();
-  	rcl_ret_t rc;
+        // Node
+        rc = rclc_node_init_default(
+      	    &node,
+      	    "esp32_motor_robot",
+      	    "",
+      	    &support);
  
-    // Support
-  	rc = rclc_support_init(
-    	&support, 
-		0, 
-		NULL, 
-		&allocator);
-    
-	if (rc != RCL_RET_OK) { Serial.println("support_init ERROR"); return; }
- 
-    // Node
-     rc = rclc_node_init_default(
-      	&node,
-      	"esp32_motor_robot",
-      	"",
-      	&support);
- 
-  	if (rc != RCL_RET_OK) { Serial.println("node_init ERROR"); return; }
+  	    if (rc != RCL_RET_OK) { Serial.println("node_init ERROR"); return; }
 
-	// Publisher:
-	rc = rclc_publisher_init_default(
-    	&publisher,
-    	&node,
-    	ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    	"esp_value");
-	if (rc != RCL_RET_OK) { Serial.println("publisher_init ERROR"); return; }
+	    // Publisher:
+	    rc = rclc_publisher_init_default(
+    	    &publisher,
+    	    &node,
+    	    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    	    "esp_value");
+	    if (rc != RCL_RET_OK) { Serial.println("publisher_init ERROR"); return; }
 
+     	// Message init + Buffer setzen (WICHTIG für MultiArray)
+	    std_msgs__msg__Int32MultiArray__init(&speed_msg); //###
 
- 	// Message init + Buffer setzen (WICHTIG für MultiArray)
-	std_msgs__msg__Int32MultiArray__init(&speed_msg); //###
-
-	speed_msg.data.data = speed_data_buffer; 
-	speed_msg.data.capacity = 3;  
-	speed_msg.data.size = 0;  
+	    speed_msg.data.data = speed_data_buffer; 
+	    speed_msg.data.capacity = 3;  
+	    speed_msg.data.size = 0;  
   	
-	// Subscriber auf "cmd_speed" (std_msgs/Int32)
-  	rc = rclc_subscription_init_default(
-      	&subscriber,
-      	&node,
-//###   ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-      	ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray),
-      	"cmd_speed");
+	    // Subscriber auf "cmd_speed" (std_msgs/Int32)
+  	    rc = rclc_subscription_init_default(
+      	    &subscriber,
+      	    &node,
+            //###   ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+      	    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray),
+      	    "cmd_speed");
   
-	if (rc != RCL_RET_OK) { Serial.println("subscription_init ERROR"); return; }
+    	if (rc != RCL_RET_OK) { Serial.println("subscription_init ERROR"); return; }
  
-    // Executor (1 Subscription):
-    rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
+        // Executor (1 Subscription):
+        rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
   
-	if (rc != RCL_RET_OK) { Serial.println("executor_init ERROR"); return; }
+	    if (rc != RCL_RET_OK) { Serial.println("executor_init ERROR"); return; }
  
-    rc = rclc_executor_add_subscription(
-      	&executor,
-      	&subscriber,
-      	&speed_msg,
-      	&speed_callback,
-      	ON_NEW_DATA);
-  	if (rc != RCL_RET_OK) { Serial.println("executor_add_sub ERROR"); return; }
+        rc = rclc_executor_add_subscription(
+      	    &executor,
+      	    &subscriber,
+      	    &speed_msg,
+      	    &speed_callback,
+      	    ON_NEW_DATA);
+  	    if (rc != RCL_RET_OK) { Serial.println("executor_add_sub ERROR"); return; }
+       
+    } // autonomous
 
     drive(0, 0);
     onBoardLedOff();
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
-    watch = 100; while (watch); // 100 ms wait time
+    printf("watch 100\n");
+    watch = 100; while (watch){
+    }; // 100 ms wait time
 
-  	printf("micro-ROS Motor init DONE\n\n");
+  	if (autonomous) printf("micro-ROS Motor init DONE\n\n");
 
-    // ROS ---------------------
 
     oneSecFlag = FALSE; 
     qSecFlag = FALSE;
@@ -561,6 +571,7 @@ void setup()
             {
                 msys = (msys) ? 0:1; 
                 printMotorSystem(msys);
+                printf("motsys: %d\n", msys);
                 watch = 1000; while (watch); // 100 ms wait time
             }
 
@@ -572,13 +583,14 @@ void setup()
             motorSys = msys;    
             drive(0,0);    
             printStored();
+            printf("stored: %d\n", msys);
 
             leds[0] = CRGB{0, 0, 0}; // R B G
             leds[1] = CRGB{0, 0, 0};
             leds[2] = CRGB{0, 0, 0};
             leds[3] = CRGB{0, 0, 0};
             FastLED.show();
-
+/*#####
             while (digitalRead(TEST_PIN_TX2) == HIGH);
             drive(0,0);
 
@@ -642,7 +654,7 @@ void setup()
             minSpeed = count; 
             printSpeedMin(minSpeed);
             storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
-
+####*   später */
 
             drive(0,0);
             
