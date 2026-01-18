@@ -3,6 +3,7 @@
                         s c o u t 2 5
 
                                                    қuran nov 2025
+                                                
 ******************************************************************/
 #include <Arduino.h>
 #include <Wire.h>
@@ -328,6 +329,7 @@ void setup()
     attachInterrupt(digitalPinToInterrupt(impulsR), impuls_R_isr, FALLING);
     attachInterrupt(digitalPinToInterrupt(impulsL), impuls_L_isr, FALLING);
 
+/* -----------------------------------
     // ROS: 
     if (autonomous)
     {
@@ -399,6 +401,7 @@ void setup()
   	    if (rc != RCL_RET_OK) { Serial.println("executor_add_sub ERROR"); return; }
        
     } // autonomous
+ -----------------------------------*/    
 
     drive(0, 0);
     onBoardLedOff();
@@ -466,6 +469,34 @@ void setup()
         int i = 0;
         int msg = 0; 
         int ret;
+        int phase = 0;
+
+        // zunächst nur Blinken (Funkeln) - per Zufall ! 
+
+        for(;phase == 0;)
+        {
+            i = rand()%4; 
+            if (i > 3) i = 0;
+            switch(i) // sobald ein die eigene robId empfangen wird - könnte hier umgeschalten werden
+                      // das ist in der Funktion cmd_speed
+            {
+    case 0: f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00); break;
+    case 1: f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff); break;
+    case 2: f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00); break;
+    case 3: f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00); break;
+            } 
+            watch = 500; 
+            while(watch)
+            {
+                // autonomous wait - loop:
+
+                // hier wird dann für zwei Sekunden nachgesehen, ob der Server da ist. 
+                // falls ja: nächste phase starten
+              
+            }
+        }         
+
+
 
         for(;;)
         {
