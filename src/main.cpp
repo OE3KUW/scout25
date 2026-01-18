@@ -16,7 +16,6 @@
 #include <rclc/executor.h>
 #include <std_msgs/msg/int32.h> 
 #include <std_msgs/msg/int32_multi_array.h> 
-// 
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -34,18 +33,17 @@
 #define L                               LOW
 
 // WLAN & Agent:
-/** /
+/* */
 #define WIFI_SSID                       "A1-7DC69BC1"
 #define WIFI_PASS                       "HvCtieELY4tVFs"
 #define AGENT_IP                        "10.0.0.229"    // IP vom Pi400 eth0
-/*/
+/* /
 #define WIFI_SSID                       "HTL-WLAN-IoT"
 #define WIFI_PASS                       "HTL2IoT!"
 #define AGENT_IP                        "10.115.61.237" // IP vom Pi400 wlan0
-//#define AGENT_IP                        "172.17.0.1" // IP vom Pi400 wlan0
+#define AGENT_IP                        "172.17.0.1" // IP vom Pi400 wlan0
 /**/
 #define AGENT_PORT                      8888
-
 
 #define WAIT_ONE_SEC                    10000
 #define WAIT_250_MSEC                   2500
@@ -117,7 +115,6 @@ rclc_executor_t    executor;
 std_msgs__msg__Int32 out_msg;   
 std_msgs__msg__Int32MultiArray speed_msg;   // robId, speedL, speedR
 static int32_t speed_data_buffer[3]; 
-
 
 hw_timer_t *timer = NULL;
 void IRAM_ATTR myTimer(void);
@@ -242,8 +239,6 @@ void speed_callback(const void * msgin)
     }
 }
 
-
-
 void printBtMac()
 {
     const uint8_t* mac = esp_bt_dev_get_address();
@@ -291,9 +286,8 @@ void setup()
         return;
     }
 
-
-    //  Werte noch selbst speichern - das komt dann später weg !!! 
-    preSet(); // store setup to EEPROM um andere Daten ins E2Prom zu schreiben
+    // Werte noch selbst speichern - das komt dann später weg !!! 
+    // preSet();
     
     getSet();
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
@@ -338,12 +332,12 @@ void setup()
     if (autonomous)
     {
         // start ROS!
+        Serial.println("autonomous mode: start ros2");
 
              // micro-ROS Transport über WLAN:
              
       	set_microros_wifi_transports( (char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
 	    delay(2000);
-
 
   	    allocator = rcl_get_default_allocator();
   	    rcl_ret_t rc;
@@ -416,7 +410,6 @@ void setup()
     }; // 100 ms wait time
 
   	if (autonomous) printf("micro-ROS Motor init DONE\n\n");
-
 
     oneSecFlag = FALSE; 
     qSecFlag = FALSE;
@@ -551,11 +544,12 @@ void setup()
 
         break;
 
+/*******************/
+/*     M E N U     */
+/*******************/
+
         case MODE_MENU:
 
-/***********/
-/* M E N U */
-/***********/
 
             leds[0] = CRGB{255, 255, 255}; // R B G
             leds[1] = CRGB{255, 255, 255};
@@ -590,8 +584,9 @@ void setup()
             leds[2] = CRGB{0, 0, 0};
             leds[3] = CRGB{0, 0, 0};
             FastLED.show();
-/*#####
-            while (digitalRead(TEST_PIN_TX2) == HIGH);
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+
             drive(0,0);
 
             watch = 500; while (watch); 
@@ -608,12 +603,12 @@ void setup()
             }
 
             watch = 500; while (watch);
-            count = 200; 
+
+            count = 200; // wird jetzt als speed verwendet
             prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
 
             while (count < 256) //255 letzter Wert!
             {
-
                 drive(count, -count);
                 watch = 300; while (watch);
                 count += 5;
@@ -626,9 +621,16 @@ void setup()
             last_impulsCntL = -2; 
             last_impulsCntR = -2;
 
-            while ((count > 100))  // Timeout integrated!
+            while ((count > 200))  // von 255 bis 200
             {
+                drive(-count, count);
+                watch = 300; while (watch);
+                count -= 5;
+                calibrateMFS();
 
+                /* wir könnten hier feststellen, wie langsam die Motoren noch arbeiten ...*/
+                /*
+                // - zunächst geht es hier nur um die Calibrierung des Magnetfeldsensors. 
                 if (((impulsCntL - last_impulsCntL) > 1) && 
                     ((impulsCntR - last_impulsCntR) > 1)     )
                 {
@@ -644,17 +646,16 @@ void setup()
                     else if (count > 150) count -= 3;
                     else if (count > 120) count -= 2;
                     else count--;
-
                     // for tests:
                     printf("count min : %d %d %d %d %d\n", count, impulsCntL, impulsCntR,
                         impulsCntL - last_impulsCntL, impulsCntR - last_impulsCntR);
                 }
+                */
             }
 
-            minSpeed = count; 
-            printSpeedMin(minSpeed);
-            storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
-####*   später */
+            //minSpeed = count; 
+            //printSpeedMin(minSpeed);
+            // storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
 
             drive(0,0);
             
