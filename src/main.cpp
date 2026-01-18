@@ -5,6 +5,9 @@
                                                    қuran nov 2025
                                                 
 ******************************************************************/
+/*
+autonomous system wird gerade umgebaut - derzeit kommentiert.
+******************************************************************/
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
