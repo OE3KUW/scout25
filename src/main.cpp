@@ -6,6 +6,7 @@
 
                                                      қuran nov 2025
 ******************************************************************/
+#define VERSION                         "jan 26"
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
@@ -31,7 +32,6 @@
 #include <esp_bt_device.h>
 #include <esp_system.h>
 
-#define VERSION                         "jan 26"
 
 #define TRUE                            true
 #define FALSE                           false
