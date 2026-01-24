@@ -116,7 +116,7 @@
 #define ROTATE                          0
 
 #define CMD_DRIVE                       0
-#define CMD_FLED                        1
+#define CMD_FLED                        0xf
 
 
 // micro-ROS Variablen:
