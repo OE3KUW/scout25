@@ -1,11 +1,11 @@
 /******************************************************************
 
-                        s c o u t 2 5
 
-                                                   қuran nov 2025
-                                                
+                          s c o u t 2 5
+
+
+                                                     қuran nov 2025
 ******************************************************************/
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
@@ -29,6 +29,9 @@
 #include <esp_bt_main.h>
 #include <esp_gap_bt_api.h>
 #include <esp_bt_device.h>
+#include <esp_system.h>
+
+#define VERSION                         "jan 26"
 
 #define TRUE                            true
 #define FALSE                           false
@@ -37,15 +40,13 @@
 
 // WLAN & Agent:
 /* */
-#define WIFI_SSID                       "..."
-#define WIFI_PASS                       "..."
-#define AGENT_IP                        "..."    // IP vom Pi400 eth0
 /* /
 #define WIFI_SSID                       "..."
 #define WIFI_PASS                       "...!"
 #define AGENT_IP                        "..." // IP vom Pi400 wlan0
 #define AGENT_IP                        "..." // IP vom Pi400 wlan0
 /**/
+
 #define AGENT_PORT                      8888
 
 #define WAIT_ONE_SEC                    10000
@@ -75,6 +76,13 @@
 #define EEPROM_PASSWORD_ADDR            60
 #define EEPROM_MOTOR_SYS_ADDR           80
 #define EEPROM_PS4_ADDR                 82
+#define EEPROM_WIFI_SYS_ADDR            84
+#define EEPROM_WIFI_0_SSID_ADDR         100
+#define EEPROM_WIFI_0_PASS_ADDR         115
+#define EEPROM_WIFI_0_IP_ADDR           130
+#define EEPROM_WIFI_1_SSID_ADDR         150
+#define EEPROM_WIFI_1_PASS_ADDR         165
+#define EEPROM_WIFI_1_IP_ADDR           180
 
 #define TRIG_PIN                        25  
 #define ECHO_PIN                        26
@@ -106,6 +114,10 @@
 #define MODE_BT                         2
 #define DRIVE                           1   
 #define ROTATE                          0
+
+#define CMD_DRIVE                       0
+#define CMD_FLED                        1
+
 
 // micro-ROS Variablen:
 rcl_allocator_t    allocator;
@@ -144,13 +156,16 @@ volatile int prell = 0;
 
 volatile float batteryLevel = 0.;
 volatile int motorSys = 0;
+volatile int wifiSys = 0;
 int robId;
 String robName;
 String IntVal;
 String motorSysFromEEPROM = "";
+String wifiSysFromEEPROM = "";
 String pskey = "";
 String ssidWord = "";
 String password = "";
+String ipNode = "";
 
 int xMin = 32767, xMax = -32768;
 int yMin = 32767, yMax = -32768;
@@ -178,6 +193,7 @@ int minSpeed;
 int ps;
 int psMode;
 int msys;
+int wsys;
 int stateBT = DRIVE;
 int isMFSavailable = FALSE;
 int mfs = 0x1e;
@@ -205,6 +221,7 @@ void scanI2CBus();   // for tests only
 void printData(void);   // Ausgabe am Display
 void printImpulse(void); 
 void printMotorSystem(int msys);
+void printWifiSystem(int msys);
 void printPs4(int ps);
 void printStored(void);
 void printCount(int i); 
@@ -213,8 +230,7 @@ void printComp(float w);
 void printClearQ(void);
 void printCleared(void);
 void printRobName(const String& name);
-void printClearQ(void);
-void printCleared(void);
+void printReset(void);
 
 void switchLedsOn(int ps, int sMode);
 //void speed_callback(const void * msgin);
@@ -223,7 +239,8 @@ void switchLedsOn(int ps, int sMode);
 
 void speed_callback(const void * msgin)
 {
-  	const std_msgs__msg__Int32MultiArray * msg = 
+
+    const std_msgs__msg__Int32MultiArray * msg = 
 	    (const std_msgs__msg__Int32MultiArray *) msgin;
 
 	if (msg->data.size < 3) {  
@@ -232,13 +249,42 @@ void speed_callback(const void * msgin)
     	return;
   	}
 
-    int Id = msg->data.data[0];        // robId
-  	int speedL = msg->data.data[1];    // erwartet -255..255
-  	int speedR = msg->data.data[2];    // erwartet -255..255
+    int Id  = msg->data.data[0] >> 4;       // robId
+    int cmd = msg->data.data[0] & 0x0f;   // command
+    int lf  = msg->data.data[1];          // left - front
+    int rb  = msg->data.data[2];          // right - back
+
+    // commands:
+
+    printf("Id %d cmd %d  lf %x rb %x\n", Id, cmd, lf, rb);
 
     if ((Id == robId) || Id == 0)  // Id == 0: command for every! rob 
     {
-        drive(speedL, speedR);
+        switch(cmd)
+        {
+            case CMD_DRIVE:
+                printf("drive left : %d   right : %d \n", lf,rb);
+                drive(lf, rb);
+            break;
+
+            case CMD_FLED:   
+                leds[0] = CRGB{ static_cast<fl::u8>((((lf >> 4) & 4) == 4) ? 255 : 0),
+                                static_cast<fl::u8>((((lf >> 4) & 1) == 1) ? 255 : 0),
+                                static_cast<fl::u8>((((lf >> 4) & 2) == 2) ? 255 : 0)};
+                leds[1] = CRGB{ static_cast<fl::u8>((((lf     ) & 4) == 4) ? 255 : 0),
+                                static_cast<fl::u8>((((lf     ) & 1) == 1) ? 255 : 0),
+                                static_cast<fl::u8>((((lf     ) & 2) == 2) ? 255 : 0)};
+                leds[2] = CRGB{ static_cast<fl::u8>((((rb     ) & 4) == 4) ? 255 : 0),
+                                static_cast<fl::u8>((((rb     ) & 1) == 1) ? 255 : 0),
+                                static_cast<fl::u8>((((rb     ) & 2) == 2) ? 255 : 0)};
+                leds[3] = CRGB{ static_cast<fl::u8>((((rb >> 4) & 4) == 4) ? 255 : 0),
+                                static_cast<fl::u8>((((rb >> 4) & 1) == 1) ? 255 : 0),
+                                static_cast<fl::u8>((((rb >> 4) & 2) == 2) ? 255 : 0)};
+
+                FastLED.show();
+
+            break;
+        }
     }
 }
 
@@ -249,7 +295,6 @@ void printBtMac()
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-void clearBtClassicBonds();  // im Test... 
 
 void f(unsigned char a, unsigned char b, unsigned char c,  unsigned char d, unsigned char e, unsigned char f,
        unsigned char g, unsigned char h, unsigned char i,  unsigned char j, unsigned char k, unsigned char l)
@@ -278,10 +323,9 @@ void setup()
     pinMode(TEST_PIN_RX2, INPUT_PULLUP);
     pinMode(TEST_PIN_TX2, INPUT_PULLUP);
 
-    drive(0, 0);
-    Serial.println("start scout25");
-
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // deactiviere die Brownout Detection !!!
+
+    drive(0, 0);
 
     /* restore all eeprom variables: */
     if (!EEPROM.begin(EEPROM_SIZE)) {
@@ -290,8 +334,7 @@ void setup()
     }
 
     // Werte noch selbst speichern - das komt dann später weg !!! 
-    // preSet();
-    
+    preSet();
     getSet();
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
     batteryLevel = analogRead(BATTERY_LEVEL) / REFV;
@@ -322,6 +365,7 @@ void setup()
         if (digitalRead(TEST_PIN_TX2) == HIGH) autonomous = FALSE;
     }
 
+    // autonomous wird innerhalb MENU BT eingebaut - derzeit
    
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &myTimer, true);
@@ -331,90 +375,8 @@ void setup()
     attachInterrupt(digitalPinToInterrupt(impulsR), impuls_R_isr, FALLING);
     attachInterrupt(digitalPinToInterrupt(impulsL), impuls_L_isr, FALLING);
 
-/* -----------------------------------
-    // ROS: 
-    if (autonomous)
-    {
-        // start ROS!
-        Serial.println("autonomous mode: start ros2");
-
-             // micro-ROS Transport über WLAN:
-             
-      	set_microros_wifi_transports( (char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
-	    delay(2000);
-
-  	    allocator = rcl_get_default_allocator();
-  	    rcl_ret_t rc;
- 
-        // Support
-  	    rc = rclc_support_init(
-    	    &support, 
-		    0, 
-		    NULL, 
-		    &allocator);
-    
-	    if (rc != RCL_RET_OK) { Serial.println("support_init ERROR"); return; }
- 
-        // Node
-        rc = rclc_node_init_default(
-      	    &node,
-      	    "esp32_motor_robot",
-      	    "",
-      	    &support);
- 
-  	    if (rc != RCL_RET_OK) { Serial.println("node_init ERROR"); return; }
-
-	    // Publisher:
-	    rc = rclc_publisher_init_default(
-    	    &publisher,
-    	    &node,
-    	    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    	    "esp_value");
-	    if (rc != RCL_RET_OK) { Serial.println("publisher_init ERROR"); return; }
-
-     	// Message init + Buffer setzen (WICHTIG für MultiArray)
-	    std_msgs__msg__Int32MultiArray__init(&speed_msg); //###
-
-	    speed_msg.data.data = speed_data_buffer; 
-	    speed_msg.data.capacity = 3;  
-	    speed_msg.data.size = 0;  
-  	
-	    // Subscriber auf "cmd_speed" (std_msgs/Int32)
-  	    rc = rclc_subscription_init_default(
-      	    &subscriber,
-      	    &node,
-            //###   ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-      	    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray),
-      	    "cmd_speed");
-  
-    	if (rc != RCL_RET_OK) { Serial.println("subscription_init ERROR"); return; }
- 
-        // Executor (1 Subscription):
-        rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
-  
-	    if (rc != RCL_RET_OK) { Serial.println("executor_init ERROR"); return; }
- 
-        rc = rclc_executor_add_subscription(
-      	    &executor,
-      	    &subscriber,
-      	    &speed_msg,
-      	    &speed_callback,
-      	    ON_NEW_DATA);
-  	    if (rc != RCL_RET_OK) { Serial.println("executor_add_sub ERROR"); return; }
-       
-    } // autonomous
- -----------------------------------*/    
-
     drive(0, 0);
     onBoardLedOff();
-
-    sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
-
-    printf("watch 100\n");
-    watch = 100; while (watch){
-    }; // 100 ms wait time
-
-  	if (autonomous) printf("micro-ROS Motor init DONE\n\n");
 
     oneSecFlag = FALSE; 
     qSecFlag = FALSE;
@@ -422,25 +384,25 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
-    
 
+    sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
+
+    watch = 100; while (watch){    }; // 100 ms wait time
+  
     isMFSavailable = !initMFS(); // init liefert 0 falls der Baustein initialisiert werden konnte.
     
     printf("\n______________________________________________________________________________________\n");
-    printf("\n                        %s  robId %d    %s      mode: %s\n", 
-        robName, robId,
-        (autonomous == TRUE) ? "autonomes System": "", 
-        (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
+    printf("\nversion: %s | name: %s  robId %d  | %s      mode: %s\n", 
+              VERSION,      robName,  robId,
+        (autonomous == TRUE) ? "autonomes System": "",   (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
     printf("______________________________________________________________________________________\n");
     printf("battery: %1.3f\n", batteryLevel);
-    printf("motorSystem: %d\n", motorSys);
+    printf("motorSystem: %d  wifi: %s\n", motorSys, (wifiSys == 0)? "home":"work");
     printf("minSpeed %d\n", minSpeed);
-    //printf("ssid: %s\n", ssidWord);
-    //printf("password: %s\n", password);
+    printf("ssid: %s  password: %s ipNode %s\n", (char*) ssidWord.c_str(), password.c_str(), ipNode.c_str());
     printf("ps4-System: %d %s\n", ps, (ps == PS4_GRAY) ? "gray" : (ps == PS4_RED) ? "red" : "blue");
     printf("xMin %d xMax %d yMin %d yMax %d\n", xMin, xMax, yMin, yMax);
-    printf("magneticfield-sesor: (MFS) available: %s 0x%02X\n", 
-          (isMFSavailable) ? "yes":"no", (isMFSavailable) ? mfs : 0);
+    printf("magneticfield-sesor: (MFS) available: %s 0x%02X\n", (isMFSavailable) ? "yes":"no", (isMFSavailable) ? mfs : 0);
     printf("______________________________________________________________________________________\n");
     printf("start!\n");
     
@@ -465,7 +427,6 @@ void setup()
 
     FastLED.show();
 
-
     if (autonomous)
     {
         int i = 0;
@@ -475,8 +436,10 @@ void setup()
 
         // zunächst nur Blinken (Funkeln) - per Zufall ! 
 
-        set_microros_wifi_transports((char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
-
+//        set_microros_wifi_transports((char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
+        set_microros_wifi_transports((char*) ssidWord.c_str(), 
+                                     (char*) password.c_str(), 
+                                     (char*) ipNode.c_str(), AGENT_PORT);
         for(;phase == 0;)
         {
             i = rand()%4; 
@@ -484,10 +447,10 @@ void setup()
             switch(i) // sobald ein die eigene robId empfangen wird - könnte hier umgeschalten werden
                       // das ist in der Funktion cmd_speed
             {
-    case 0: f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00); break;
-    case 1: f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff); break;
-    case 2: f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00); break;
-    case 3: f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00); break;
+                case 0: f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00); break;
+                case 1: f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff); break;
+                case 2: f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00); break;
+                case 3: f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00); break;
             } 
             watch = 500; 
             while(watch)
@@ -495,12 +458,20 @@ void setup()
                 // autonomous wait - loop: - ist der ROS2 Server - aget erreichbar? 
 
                 if (RMW_RET_OK == rmw_uros_ping_agent(50, 1)) { phase = 1;} else
-                printf("micro-ROS Agent noch nicht erreichbar -> warte ...\n");
+                printf("."); // warte
              
             }
         }         
 
         printf("autonomous mode: phase == 1:  start ros2\n");
+
+        leds[0] = CRGB{0, 0, 0}; // R B G
+        leds[1] = CRGB{0, 0, 0};
+        leds[2] = CRGB{0, 0, 0};
+        leds[3] = CRGB{0, 0, 0};
+
+        FastLED.show();
+
 
         // ROS 2 init: 
 
@@ -567,15 +538,6 @@ void setup()
 
         for(;;)
         {
-            i++; if (i > 3) i = 0;
-            switch(i) // sobald ein die eigene robId empfangen wird - könnte hier umgeschalten werden
-                      // das ist in der Funktion cmd_speed
-            {
-    case 0: f(0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00); break;
-    case 1: f(0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00,   0x00, 0x00, 0xff); break;
-    case 2: f(0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00,   0x00, 0xff, 0x00); break;
-    case 3: f(0x00, 0xff, 0x00,   0x00, 0x00, 0xff,   0x00, 0x00, 0x00,   0xff, 0x00, 0x00); break;
-            } 
             watch = 2000; 
             while(watch)
             {
@@ -675,7 +637,84 @@ void setup()
             motorSys = msys;    
             drive(0,0);    
             printStored();
-            printf("stored: %d\n", msys);
+            printf("stored motor system: %d\n", msys);
+
+            /* TX2 ist noch immer low - dadurch wurde ja gespeichert - darum erst warten, wis der TX2 sicher high ist */
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
+
+
+        /*  wifisystem wählen: */
+
+            wsys = 0; 
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                wsys = (wsys) ? 0:1; 
+                printWifiSystem(wsys);
+                printf("wifi sys: %d\n", wsys);
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            if (wsys == 0)
+                storeStr2EEPROM("0", EEPROM_WIFI_SYS_ADDR);
+            else
+                storeStr2EEPROM("1", EEPROM_WIFI_SYS_ADDR);
+
+            wifiSys = wsys;    
+            printStored();
+            printf("stored wifi: %s\n", (wsys == 0)? "home" : "work");
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
+
+            // Controller wählen: 
+
+            ps  = PS4_GRAY; 
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                ps++; 
+                if (ps > PS4_GRAY) ps = PS4_BLUE;
+                printPs4(ps);
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            storeInt2EEPROM(ps, EEPROM_PS4_ADDR);     
+
+            printStored();
+
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
+
+
+            msys = 0;  // here: "msys" =  my system name - msys als Hilsvariable verwendet - statt robId
+
+            while (digitalRead(TEST_PIN_TX2) == LOW)
+            {
+                msys++; if (msys > 7) msys = 0;
+                
+                sprintf(text,"rob%c",msys + '0');
+                printRobName(text);
+
+                watch = 1000; while (watch); // 100 ms wait time
+            }
+
+            storeStr2EEPROM(text, EEPROM_ROB_NAME);
+            printStored();
+
+            robName = readFromEEPROM(EEPROM_ROB_NAME);
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
+
+            printf("----- calibrieren -------\n");
 
             leds[0] = CRGB{0, 0, 0}; // R B G
             leds[1] = CRGB{0, 0, 0};
@@ -751,16 +790,16 @@ void setup()
                 */
             }
 
-            //minSpeed = count; 
-            //printSpeedMin(minSpeed);
+            // minSpeed = count; 
+            // printSpeedMin(minSpeed);
             // storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
 
             drive(0,0);
             
-            storeInt2EEPROM(xMin, EEPROM_MFS_MINX);     
-            storeInt2EEPROM(xMax, EEPROM_MFS_MAXX);     
-            storeInt2EEPROM(yMin, EEPROM_MFS_MINY);     
-            storeInt2EEPROM(yMax, EEPROM_MFS_MAXY);     
+            storeInt2EEPROM(xMin, EEPROM_MFS_MINX);     // derzeit noch nicht verwendet!
+            storeInt2EEPROM(xMax, EEPROM_MFS_MAXX);     // derzeit noch nicht verwendet!
+            storeInt2EEPROM(yMin, EEPROM_MFS_MINY);     // derzeit noch nicht verwendet!
+            storeInt2EEPROM(yMax, EEPROM_MFS_MAXY);     // derzeit noch nicht verwendet!
 
             watch = 500; while (watch); 
             watch = 5000; while (watch)
@@ -769,58 +808,18 @@ void setup()
                 printComp(angle);
             }
             
-            // Controller: 
 
 
-            ps  = PS4_GRAY; 
+            printReset();
+
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
 
-            while (digitalRead(TEST_PIN_TX2) == LOW)
-            {
-                ps++; 
-                if (ps > PS4_GRAY) ps = PS4_BLUE;
-                printPs4(ps);
-                watch = 1000; while (watch); // 100 ms wait time
-            }
+            printf("Reset - done");
+            esp_restart();
 
-            storeInt2EEPROM(ps, EEPROM_PS4_ADDR);     
-
-            printStored();
-
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten, bis die Leitung wieder gesteckt ist! 
-        /*  rob name wählen: */
-
-            msys = 0;  // here: "msys" =  my system name 
-
-            while (digitalRead(TEST_PIN_TX2) == LOW)
-            {
-                msys++; if (msys > 7) msys = 0;
-                
-                sprintf(text,"rob%c",msys + '0');
-                printRobName(text);
-
-                watch = 1000; while (watch); // 100 ms wait time
-            }
-
-            storeStr2EEPROM(text, EEPROM_ROB_NAME);
-            printStored();
-
-            robName = readFromEEPROM(EEPROM_ROB_NAME);
-
-            while (digitalRead(TEST_PIN_TX2) == HIGH);            // warten, bis die Leitung wieder gesteckt ist! 
-
-
-            printClearQ();
-
-            while (digitalRead(TEST_PIN_TX2) == LOW); // wartet ob die Leitung wieder gzogen wird. 
-
-
-            clearBtClassicBonds();   // für Testzwecke -> letzter Menüpunkt
-
-            printCleared();
-            printf("clearClassicBonds - done");
-
-            while (digitalRead(TEST_PIN_TX2) == HIGH);            // warten, bis die Leitung wieder gesteckt ist! 
 
 
         break; 
@@ -1431,7 +1430,7 @@ void printPs4(int ps)
 void printRobName(const String& name)
 {
     oled.fillRect(0, 20, 128, 64, 0); // clear all!
-    oled.setCursor(20, 32);
+    oled.setCursor(5, 32);
     oled.print(name);
     oled.display();
 }
@@ -1440,10 +1439,20 @@ void printMotorSystem(int msys)
 {
     oled.fillRect(0, 20, 128, 64, 0); // clear all!
     sprintf(text,"m-sys: %c", msys  + '0');
-    oled.setCursor(20, 32);
+    oled.setCursor(10, 32);
     oled.print(text);
     oled.display();
 }
+
+void printWifiSystem(int msys)
+{
+    oled.fillRect(0, 20, 128, 64, 0); // clear all!
+    sprintf(text,"wifi:%s", (wsys == 0) ? "home":"work");
+    oled.setCursor(10, 32);
+    oled.print(text);
+    oled.display();
+}
+
 void printStored(void)
 {
     sprintf(text,"stored!");
@@ -1452,23 +1461,14 @@ void printStored(void)
     oled.display();
 }
 
-void printClearQ(void)
+void printReset(void)
 {
     oled.fillRect(0, 20, 128, 64, 0); // clear all!
-    sprintf(text,"clear ? ");
-    oled.setCursor(20, 48);
+    sprintf(text,"reset ? ");
+    oled.setCursor(10, 48);
     oled.print(text);
     oled.display();
 }
-void printCleared(void)
-{
-    oled.fillRect(0, 20, 128, 64, 0); // clear all!
-    sprintf(text,"cleared !");
-    oled.setCursor(20, 48);
-    oled.print(text);
-    oled.display();
-}
-
 
 void printData(void)
 {
@@ -1604,8 +1604,14 @@ void preSet(void)
 {
     //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
     //storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
-    //storeStr2EEPROM("A1-A82861", EEPROM_SSID_ADDR); // das sind noch alte Daten... 
-    //storeStr2EEPROM("7PMGDV96J8", EEPROM_PASSWORD_ADDR);
+    //storeStr2EEPROM("0",              EEPROM_WIFI_SYS_ADDR);     
+    storeStr2EEPROM("A1-7DC69BC1",    EEPROM_WIFI_0_SSID_ADDR); 
+    storeStr2EEPROM("HvCtieELY4tVFs", EEPROM_WIFI_0_PASS_ADDR);
+    storeStr2EEPROM("10.0.0.229",     EEPROM_WIFI_0_IP_ADDR);
+    storeStr2EEPROM("HTL-WLAN-IoT",   EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
+    storeStr2EEPROM("HTL2IoT!",       EEPROM_WIFI_1_PASS_ADDR);
+    storeStr2EEPROM("10.115.61.237",  EEPROM_WIFI_1_IP_ADDR);
+
 }
 
 void getSet(void)
@@ -1616,8 +1622,14 @@ void getSet(void)
     minSpeed = getIntFromEEPROM(EEPROM_MIN_SPEED);
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
     motorSys = (char)motorSysFromEEPROM[0] - '0';
-    ssidWord = readFromEEPROM(EEPROM_SSID_ADDR);
-    password = readFromEEPROM(EEPROM_PASSWORD_ADDR);
+
+    motorSysFromEEPROM = readFromEEPROM(EEPROM_WIFI_SYS_ADDR);
+    wifiSys = (char)motorSysFromEEPROM[0] - '0';
+   
+    ssidWord = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_SSID_ADDR):readFromEEPROM(EEPROM_WIFI_1_SSID_ADDR);
+    password = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_PASS_ADDR):readFromEEPROM(EEPROM_WIFI_1_PASS_ADDR);
+    ipNode   = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_IP_ADDR)  :readFromEEPROM(EEPROM_WIFI_1_IP_ADDR);
+   
     ps = getIntFromEEPROM(EEPROM_PS4_ADDR);
     xMin = getIntFromEEPROM(EEPROM_MFS_MINX);
     xMax = getIntFromEEPROM(EEPROM_MFS_MAXX);
@@ -1693,24 +1705,6 @@ void impuls_R_isr(void)
     vRSum += (dirR>0)? 1:-1;
 }
 
-void clearBtClassicBonds() 
-{
-  int dev_num = esp_bt_gap_get_bond_device_num();
-  if (dev_num <= 0) return;
-
-  esp_bd_addr_t *list = (esp_bd_addr_t*)malloc(sizeof(esp_bd_addr_t) * dev_num);
-  if (!list) return;
-
-  if (esp_bt_gap_get_bond_device_list(&dev_num, list) == ESP_OK) {
-    for (int i = 0; i < dev_num; ++i) {
-      esp_bt_gap_remove_bond_device(list[i]);
-    }
-  }
-  free(list);
-  btStop();               // Arduino-Wrapper, stoppt Classic + BLE
-  delay(100);
-  btStart();  
-}
 
 //******************************************************************
 //              T i m e r   I n t e r r u  p t : 

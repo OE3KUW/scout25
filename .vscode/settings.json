@@ -1,5 +1,7 @@
 {
     "files.associations": {
         "cmath": "cpp"
-    }
+    },
+    "workbench.editor.doubleClickTabToToggleEditorGroupSizes": "off",
+    "workbench.editor.enablePreviewFromCodeNavigation": true
 }
