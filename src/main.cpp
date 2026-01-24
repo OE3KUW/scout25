@@ -115,8 +115,12 @@
 #define DRIVE                           1   
 #define ROTATE                          0
 
-#define CMD_DRIVE                       0
-#define CMD_FLED                        0xf
+#define CMD_DRIVE                       0        // Wer:
+#define CMD_EVEN                        0xa
+#define CMD_ODD                         0xb
+
+#define CMD_COMP                        0xc     // Was:
+#define CMD_FLED                        0xf     
 
 
 // micro-ROS Variablen:
@@ -238,7 +242,8 @@ void switchLedsOn(int ps, int sMode);
 // Callback Funktion:
 
 void speed_callback(const void * msgin)
-{
+{ 
+    unsigned char a, b, c;
 
     const std_msgs__msg__Int32MultiArray * msg = 
 	    (const std_msgs__msg__Int32MultiArray *) msgin;
@@ -249,43 +254,70 @@ void speed_callback(const void * msgin)
     	return;
   	}
 
-    int Id  = msg->data.data[0] >> 4;       // robId
-    int cmd = msg->data.data[0] & 0x0f;   // command
+    int Id  = msg->data.data[0] >> 4;     // robId   - wer
+    int cmd = msg->data.data[0] & 0x0f;   // command - was
     int lf  = msg->data.data[1];          // left - front
     int rb  = msg->data.data[2];          // right - back
 
     // commands:
 
-    printf("Id %d cmd %d  lf %x rb %x\n", Id, cmd, lf, rb);
+    if ((Id == CMD_EVEN) && (robId%2 == 1)) Id = robId;
+    if ((Id == CMD_ODD)  && (robId%2 == 0)) Id = robId;
+
+    printf("Id %x cmd %x -> ", Id, cmd);
 
     if ((Id == robId) || Id == 0)  // Id == 0: command for every! rob 
     {
+        printf("lf %x rb %x ", lf, rb);
         switch(cmd)
         {
-            case CMD_DRIVE:
-                printf("drive left : %d   right : %d \n", lf,rb);
+            case CMD_DRIVE: 
+                printf("drive left : %d   right : %d ",  (0xff & lf), (0xff & rb));
                 drive(lf, rb);
             break;
 
             case CMD_FLED:   
-                leds[0] = CRGB{ static_cast<fl::u8>((((lf >> 4) & 4) == 4) ? 255 : 0),
-                                static_cast<fl::u8>((((lf >> 4) & 1) == 1) ? 255 : 0),
-                                static_cast<fl::u8>((((lf >> 4) & 2) == 2) ? 255 : 0)};
-                leds[1] = CRGB{ static_cast<fl::u8>((((lf     ) & 4) == 4) ? 255 : 0),
-                                static_cast<fl::u8>((((lf     ) & 1) == 1) ? 255 : 0),
-                                static_cast<fl::u8>((((lf     ) & 2) == 2) ? 255 : 0)};
-                leds[2] = CRGB{ static_cast<fl::u8>((((rb     ) & 4) == 4) ? 255 : 0),
-                                static_cast<fl::u8>((((rb     ) & 1) == 1) ? 255 : 0),
-                                static_cast<fl::u8>((((rb     ) & 2) == 2) ? 255 : 0)};
-                leds[3] = CRGB{ static_cast<fl::u8>((((rb >> 4) & 4) == 4) ? 255 : 0),
-                                static_cast<fl::u8>((((rb >> 4) & 1) == 1) ? 255 : 0),
-                                static_cast<fl::u8>((((rb >> 4) & 2) == 2) ? 255 : 0)};
 
+                printf("fastled: lf %x rb %x ", lf, rb);
+                
+                if (lf & 0x40) a = 255; else a = 0;
+                if (lf & 0x20) b = 255; else b = 0;
+                if (lf & 0x10) c = 255; else c = 0;
+                leds[0] = CRGB{a, b, c};  // links vorn          
+
+                printf("| %d %d %d ", a, b, c);  
+
+
+                if (lf & 0x04) a = 255; else a = 0;
+                if (lf & 0x02) b = 255; else b = 0;
+                if (lf & 0x01) c = 255; else c = 0;
+
+                printf("| %d %d %d ", a, b, c);  
+
+                leds[1] = CRGB{a, b, c}; // rechts vorn
+
+                if (rb & 0x40) a = 255; else a = 0;
+                if (rb & 0x20) b = 255; else b = 0;
+                if (rb & 0x10) c = 255; else c = 0;
+
+                printf("| %d %d %d ", a, b, c);  
+
+                leds[3] = CRGB{a, b, c}; // links hinten
+
+                if (rb & 0x04) a = 255; else a = 0;
+                if (rb & 0x02) b = 255; else b = 0;
+                if (rb & 0x01) c = 255; else c = 0;
+
+                printf("| %d %d %d ", a, b, c);  
+
+                leds[2] = CRGB{a, b, c}; // rechts hinten
+               
                 FastLED.show();
 
             break;
         }
     }
+    printf("\n");
 }
 
 void printBtMac()
