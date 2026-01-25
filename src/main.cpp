@@ -123,7 +123,14 @@
 #define CMD_ODD                         0xb
 
 #define CMD_COMP                        0xc     // Was:
+#define CMD_DATA                        0xd
+#define CMD_EMAIL                       0xe
 #define CMD_FLED                        0xf     
+
+#define STOP                            0 
+#define ROTATE                          1
+#define WAIT                            2
+#define FIND_ANGLE                      3
 
 
 // micro-ROS Variablen:
@@ -157,7 +164,9 @@ int last_impulsCntL;
 int last_impulsCntR;
 int circleMode;
 int circleTicsL, circleTicsR; 
-
+int wishedAngle;
+int flagC, flagD, flagE; 
+int storeAngle;
 
 float correctionRL; 
 volatile int countR = 0;
@@ -280,6 +289,21 @@ void speed_callback(const void * msgin)
                 printf("drive left : %d   right : %d ",  (0xff & lf), (0xff & rb));
                 drive(lf, rb);
             break;
+
+            case CMD_COMP:
+                drive(0,0);
+                wishedAngle = msg->data.data[1];
+                flagC = ROTATE;
+            break; 
+
+            case CMD_DATA:
+                 storeAngle = getMFS_Angle();;
+                 flagD = TRUE; 
+            break; 
+
+            case CMD_EMAIL:
+                 flagE = TRUE;
+            break; 
 
             case CMD_FLED:   
 
@@ -425,6 +449,8 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
+    flagC = STOP;
+    flagD = flagE = FALSE;
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
@@ -504,7 +530,9 @@ void setup()
                 printf("."); // warte
              
             }
-        }         
+        }     
+
+
 
         printf("autonomous mode: phase == 1:  start ros2\n");
 
@@ -579,7 +607,7 @@ void setup()
 
         printf("ros2 init abgeschlossen!\n");
 
-        for(;;) // "main loop ros2"
+        for(;;) // "main loop autonomous - ros2"
         {
             watch = 2000; // wozu watch.. ? 
             while(watch)
@@ -588,13 +616,45 @@ void setup()
                 
   	            rclc_executor_spin_some(&executor, RCL_MS_TO_NS(50)); // 50
 
-                if (oneSecFlag) // falls schon jemand etwas senden möchte  -> besser in ein command auslagern? 
+                if (flagE) // falls schon jemand etwas senden möchte  -> besser in ein command auslagern? 
 	            {
 		            oneSecFlag = FALSE;
-		            out_msg.data = (int32_t)msg; msg++;
+                    msg = storeAngle;
+                    out_msg.data = (int32_t)msg; 
+		            //out_msg.data = (int32_t)msg; msg++;
 		            ret = rcl_publish(&publisher, &out_msg, NULL);
 		            if (ret) printf("publishing returns %d\n", ret);
 	            }
+
+                if ((flagC == ROTATE))
+                {
+                     drive(125, -125);
+                     printf("rotate\n");
+                     flagC = WAIT;
+                     watch = 500;
+                }
+
+                if (flagC == WAIT)
+                {
+                    
+                    if ((watch == 0) && (getMFS_Angle() < -150))
+                    {
+                        printf("angle %f\n", getMFS_Angle());
+                        flagC = FIND_ANGLE;
+                    }
+                }
+
+                if (flagC == FIND_ANGLE)
+                {
+                    printf("find: angle %f wisched %d\n", getMFS_Angle(), wishedAngle - 5);
+                    printComp(getMFS_Angle());
+                    if (getMFS_Angle() > (wishedAngle - 5))
+                    {
+                        flagC = STOP;
+                        printComp(getMFS_Angle());
+                        drive(0,0);
+                    }
+                }
             }
         }         
     }
