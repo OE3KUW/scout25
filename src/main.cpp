@@ -72,6 +72,8 @@
 #define EEPROM_MFS_MAXX                 26
 #define EEPROM_MFS_MINY                 28
 #define EEPROM_MFS_MAXY                 30
+#define EEPROM_CIRCLE_TICS_L            32
+#define EEPROM_CIRCLE_TICS_R            34
 #define EEPROM_SSID_ADDR                40
 #define EEPROM_PASSWORD_ADDR            60
 #define EEPROM_MOTOR_SYS_ADDR           80
@@ -83,6 +85,7 @@
 #define EEPROM_WIFI_1_SSID_ADDR         150
 #define EEPROM_WIFI_1_PASS_ADDR         165
 #define EEPROM_WIFI_1_IP_ADDR           180
+
 
 #define TRIG_PIN                        25  
 #define ECHO_PIN                        26
@@ -153,6 +156,8 @@ volatile int impulsFlagR;
 int last_impulsCntL;
 int last_impulsCntR;
 int circleMode;
+int circleTicsL, circleTicsR; 
+
 
 float correctionRL; 
 volatile int countR = 0;
@@ -342,6 +347,10 @@ void setup()
 {
     int count; 
     bool ok = false;
+    // calibration:
+    float lastAngle;
+    int lastTicL, lastTicR;
+    int i;
 
     Serial.begin(115200);
     pinMode(ON_BOARD_LED, OUTPUT);
@@ -424,16 +433,18 @@ void setup()
     isMFSavailable = !initMFS(); // init liefert 0 falls der Baustein initialisiert werden konnte.
     
     printf("\n______________________________________________________________________________________\n");
-    printf("\nversion: %s | name: %s  robId %d  | %s      mode: %s\n", 
-              VERSION,      robName,  robId,
-        (autonomous == TRUE) ? "autonomes System": "",   (mode == 0)? "ps4": (mode == 1)? "MENU" : "BlueTooth");
+    printf("\nversion: %s | name: %s  | mode: %s \n", 
+    VERSION, robName, (autonomous == TRUE) ? "autonomes System with ros2": 
+                      (mode == 0) ?          "ps4": 
+                      (mode == 1) ?          "MENU" : 
+                                             "BlueTooth");
     printf("______________________________________________________________________________________\n");
     printf("battery: %1.3f\n", batteryLevel);
     printf("motorSystem: %d  wifi: %s\n", motorSys, (wifiSys == 0)? "home":"work");
     printf("minSpeed %d\n", minSpeed);
     printf("ssid: %s  password: %s ipNode %s\n", (char*) ssidWord.c_str(), password.c_str(), ipNode.c_str());
     printf("ps4-System: %d %s\n", ps, (ps == PS4_GRAY) ? "gray" : (ps == PS4_RED) ? "red" : "blue");
-    printf("xMin %d xMax %d yMin %d yMax %d\n", xMin, xMax, yMin, yMax);
+    printf("xMin: %d xMax: %d yMin: %d yMax: %d circleTicsL: %d circleTicsR: %d\n", xMin, xMax, yMin, yMax, circleTicsL, circleTicsR);
     printf("magneticfield-sesor: (MFS) available: %s 0x%02X\n", (isMFSavailable) ? "yes":"no", (isMFSavailable) ? mfs : 0);
     printf("______________________________________________________________________________________\n");
     printf("start!\n");
@@ -568,16 +579,16 @@ void setup()
 
         printf("ros2 init abgeschlossen!\n");
 
-        for(;;)
+        for(;;) // "main loop ros2"
         {
-            watch = 2000; 
+            watch = 2000; // wozu watch.. ? 
             while(watch)
             {
                 // autonomous loop:
                 
   	            rclc_executor_spin_some(&executor, RCL_MS_TO_NS(50)); // 50
 
-                if (oneSecFlag) // falls schon jemand etwas senden möchte
+                if (oneSecFlag) // falls schon jemand etwas senden möchte  -> besser in ein command auslagern? 
 	            {
 		            oneSecFlag = FALSE;
 		            out_msg.data = (int32_t)msg; msg++;
@@ -774,57 +785,48 @@ void setup()
             watch = 500; while (watch);
 
             count = 200; // wird jetzt als speed verwendet
+
+                   
+            drive(-200, 200);   // dreh dich, "aufwärmen"
+            watch = 3000; while(watch); // Sekunden
+
             prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
+            vLSum = vRSum = 0;
+            lastAngle = 0;
+            lastTicL  = lastTicR = 0;
 
-            while (count < 256) //255 letzter Wert!
+            count = 0;
+                   
+            drive(255, -255);   // dreh dich schnell! damit möglichst wenig Störung durch Funken des Motors passiert.
+            watch = 7000; while(watch) // Sekunde
             {
-                drive(count, -count);
-                watch = 300; while (watch);
-                count += 5;
-                calibrateMFS();
-            }
+                calibrateMFS(); // findet xmax, min ymax, min
+                angle = getMFS_Angle(); 
 
-            count = 255;
-            impulsCntL = 0;
-            impulsCntR = 0; 
-            last_impulsCntL = -2; 
-            last_impulsCntR = -2;
-
-            while ((count > 200))  // von 255 bis 200
-            {
-                drive(-count, count);
-                watch = 300; while (watch);
-                count -= 5;
-                calibrateMFS();
-
-                /* wir könnten hier feststellen, wie langsam die Motoren noch arbeiten ...*/
-                /*
-                // - zunächst geht es hier nur um die Calibrierung des Magnetfeldsensors. 
-                if (((impulsCntL - last_impulsCntL) > 1) && 
-                    ((impulsCntR - last_impulsCntR) > 1)     )
+                if ((lastAngle - angle - 270) > 0) // Sprung von +180% auf - 180 Grad! muss mindestens 270 Grad sein!
                 {
-                    //printf("# %d %d \n", (impulsCntL - last_impulsCntL), (impulsCntR - last_impulsCntR));
-                    last_impulsCntL = impulsCntL;
-                    last_impulsCntR = impulsCntR;
-                    drive(-count, count);
-                    calibrateMFS();
-                    printSpeedMin(count);
-                    impulsFlagL = impulsFlagR = FALSE;
-                    watch = 50; while (watch);  // kürzer !
-                    if (count > 200) count -= 4; 
-                    else if (count > 150) count -= 3;
-                    else if (count > 120) count -= 2;
-                    else count--;
-                    // for tests:
-                    printf("count min : %d %d %d %d %d\n", count, impulsCntL, impulsCntR,
-                        impulsCntL - last_impulsCntL, impulsCntR - last_impulsCntR);
+                    circleTicsL = vLSum - lastTicL;
+                    circleTicsR = vRSum - lastTicR;
+                    lastTicL = vLSum;
+                    lastTicR = vRSum;
+ 
+                    // es kommt leider vor, dass Messwerte auch ganz daneben liegen. (zB externer Magnet in der Nähe)
+                    // dann bleibt nichts übrig, als die Calibrierung zu wiederholen.
+
+                    // hier wird der letzte der Durchläufe gespeichert. 
+                    // die Werte differieren die ersten Durchläufe, dann sind sie nahezu konstant
+                    // das System bewegt sich immer anders, während gleichförmiger Bewegung
+                    // bzw. wenn es erst hoch läuft. (Einschwingvorgänge, Diff-Gleichungen)
                 }
-                */
+                lastAngle = angle;
+            
+                // Tests printf("%3d,  %3d,  %3d,  %3d,  %3d,  %3d,    %3.2f, %3d,         %3d\n", 
+                // Tests xMax, xMin, yMax, yMin, vLSum, vRSum, angle, circleTicsL, circleTicsR);
             }
 
-            // minSpeed = count; 
-            // printSpeedMin(minSpeed);
-            // storeInt2EEPROM(minSpeed,   EEPROM_MIN_SPEED);
+            // Tests printf("%04d, %04d, x, 0\n", xMax, yMax);
+            // Tests printf("%04d, %04d, 0, 0\n", xMin, yMin);
+
 
             drive(0,0);
             
@@ -832,16 +834,18 @@ void setup()
             storeInt2EEPROM(xMax, EEPROM_MFS_MAXX);     // derzeit noch nicht verwendet!
             storeInt2EEPROM(yMin, EEPROM_MFS_MINY);     // derzeit noch nicht verwendet!
             storeInt2EEPROM(yMax, EEPROM_MFS_MAXY);     // derzeit noch nicht verwendet!
+            storeInt2EEPROM(circleTicsL, EEPROM_CIRCLE_TICS_L);  
+            storeInt2EEPROM(circleTicsR, EEPROM_CIRCLE_TICS_R);  
 
             watch = 500; while (watch); 
-            watch = 5000; while (watch)
+            watch = 60000; while (watch) // 1 Min
             {
-                angle = getMFS_Angle() - 83.;  // bp str.4
+                angle = getMFS_Angle();  
                 printComp(angle);
             }
             
 
-
+/*
             printReset();
 
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
@@ -852,7 +856,7 @@ void setup()
             printf("Reset - done");
             esp_restart();
 
-
+*/
 
         break; 
     }
@@ -1355,22 +1359,37 @@ int calibrateMFS(void)
 {
     int ret = FALSE; 
     unsigned long lastSampleTime = 0;
+    static int16_t lastx = 0, lasty = 0;
+    static int firstCall = true; 
 
     readRawMFS(&x, &y, &z);
 
     // Ausreißer sollten eliminiert werden... (-4600...) 
 
-    if (x > xMax) { xMax = x; }
-    if (x < xMin) { xMin = x; }
-    if (y > yMax) { yMax = y; }
-    if (y < yMin) { yMin = y; }    
+    if (firstCall) 
+    {
+        firstCall = false;
+        lastx = x; 
+        lasty = y; 
+    }
 
-    if ( ((xMax -xMin) > 180) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; 
+    if ((lastx -x) < 60) // hängt natürlich von der Speed beim Calibrieren ab - die ist hoch!
+    {
+        if (x > xMax) { xMax = x; }
+        if (x < xMin) { xMin = x; }
+    }
+    lastx = x;
 
+    if ((lasty -y) < 60)
+    {
+        if (y > yMax) { yMax = y; }
+        if (y < yMin) { yMin = y; }    
+    }
+    lasty = y;
 
-    //printf("|| x: %04d  %04d  xmin: %04d xmax: %04d ||  y: %04d  %04d ymin %04d ymax %04d || L: %04d R: %04d || ret: %d angle: %3.2f\n",
-    //        x, (xMax - xMin), xMin, xMax, y, (yMax - yMin), yMin, yMax, impulsCntL, impulsCntR, ret, getMFS_Angle());
+    if ( ((xMax -xMin) > 180) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; // store ins EEPROM ? wozu ? ....
 
+// Tests! printf("%04d, %04d, ", x, y); // during calibration mode 
 
     return ret;
 }
@@ -1388,17 +1407,27 @@ float getMFS_Angle()
             xw = 2.0 * (x - xMin) / (xMax - xMin) - 1.0;
             yw = 2.0 * (y - yMin) / (yMax - yMin) - 1.0;
             angle = atan2(-yw, xw) * 180.0 / M_PI;
+// Tests:
+//        printf("%d,%d,%d,%d,%d,%d,%f,%f,%f\n",  
+//             xMax, xMin, yMax, yMin,x, y, xw, yw, angle);  
+
         }
         else 
         {
             angle = 0.;
+// Tests:
+//        printf("*,%d,%d,%d,%d,%d,%d,%f,%f,%f\n",  
+//             xMax, xMin, yMax, yMin,x, y, xw, yw, angle);  
         }
 
         if (angle < -90.) angle += 360.;
         angle -= 90.;
     }
     else
-    angle = 0;
+    {
+        angle = 0;
+        printf("kein Magnetfeldsensor available?\n");
+    }
 
     // South = 0°
     // East = 90°
@@ -1421,7 +1450,7 @@ void printComp(float w)
     while ( w < 180.) w += 360.;
     while ( w > 180.) w -= 360.;
 
-    sprintf(text,"w: %3.1f", w);
+    sprintf(text,"%.1f", w);
     oled.setCursor(0, 48);
     oled.print(text);
     oled.drawCircle(64, 32, 31, WHITE);
@@ -1506,7 +1535,7 @@ void printData(void)
 {
     int angleInt = 0;
 
-    angle = getMFS_Angle() - 83.;
+    angle = getMFS_Angle();
 
     if (circleMode)
     {
@@ -1636,7 +1665,7 @@ void preSet(void)
 {
     //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
     //storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
-    //storeStr2EEPROM("0",              EEPROM_WIFI_SYS_ADDR);     
+    //storeStr2EEPROM("0",              EEPROM_WIFI_SYS_ADDR);   
     storeStr2EEPROM("A1-7DC69BC1",    EEPROM_WIFI_0_SSID_ADDR); 
     storeStr2EEPROM("HvCtieELY4tVFs", EEPROM_WIFI_0_PASS_ADDR);
     storeStr2EEPROM("10.0.0.229",     EEPROM_WIFI_0_IP_ADDR);
@@ -1654,6 +1683,9 @@ void getSet(void)
     minSpeed = getIntFromEEPROM(EEPROM_MIN_SPEED);
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
     motorSys = (char)motorSysFromEEPROM[0] - '0';
+
+    circleTicsL = getIntFromEEPROM(EEPROM_CIRCLE_TICS_L);
+    circleTicsR = getIntFromEEPROM(EEPROM_CIRCLE_TICS_R);
 
     motorSysFromEEPROM = readFromEEPROM(EEPROM_WIFI_SYS_ADDR);
     wifiSys = (char)motorSysFromEEPROM[0] - '0';
