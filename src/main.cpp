@@ -129,8 +129,7 @@
 
 #define STOP                            0 
 #define ROTATE                          1
-#define WAIT                            2
-#define FIND_ANGLE                      3
+#define FIND_ANGLE                      2
 
 
 // micro-ROS Variablen:
@@ -167,6 +166,7 @@ int circleTicsL, circleTicsR;
 int wishedAngle;
 int flagC, flagD, flagE; 
 int actualAngle;
+int impulse;
 
 float correctionRL; 
 volatile int countR = 0;
@@ -630,33 +630,27 @@ void setup()
 
                 if ((flagC == ROTATE))
                 {
+                     impulse = wishedAngle - getMFS_Angle();
+                     impulse += 360 + 360; 
+                     impulse = impulse*(circleTicsL + circleTicsR)/360.; // circleTics brauchts für eine Runde
+                     vLSum = vRSum = 0;
+                     printf("rotate for %d ticks\n", impulse);
                      drive(125, -125);
-                     printf("rotate\n");
-                     flagC = WAIT;
-                     watch = 500;
-                }
-
-                if (flagC == WAIT)
-                {
-                    
-                    if ((watch == 0) && (getMFS_Angle() < -150))
-                    {
-                        printf("angle %f\n", getMFS_Angle());
-                        flagC = FIND_ANGLE;
-                    }
+                     flagC = FIND_ANGLE;
                 }
 
                 if (flagC == FIND_ANGLE)
                 {
-                    printf("find: angle %f wisched %d\n", getMFS_Angle(), wishedAngle - 5);
-                    printComp(getMFS_Angle());
-                    if (getMFS_Angle() > (wishedAngle - 5))
+                   
+                    if ((vLSum + vRSum) > (impulse))  
                     {
-                        flagC = STOP;
-                        printComp(getMFS_Angle());
                         drive(0,0);
+                        printf("angle %f impulse %d  sum %d \n", getMFS_Angle(), impulse,vLSum + vRSum);
+                        printComp(getMFS_Angle());
+                        flagC = STOP;
                     }
                 }
+
             }
         }         
     }
@@ -1503,9 +1497,14 @@ float getMFS_Angle()
 void printComp(float w)
 {
     int x, y;
+    int x2, y2;
 
-    x = 30 * cos(w * M_PI / 180.);
-    y = 30 * sin(w * M_PI / 180.);
+    x = 28 * cos(w * M_PI / 180.);
+    y = 28 * sin(w * M_PI / 180.);
+
+    x2 = x/4;
+    y2 = y/4;
+
 
     oled.fillRect(0, 0, 128, 64, 0); // clear all!
     
@@ -1513,17 +1512,18 @@ void printComp(float w)
     while ( w > 180.) w -= 360.;
 
     sprintf(text,"%.1f", w);
-    oled.setCursor(0, 48);
+    oled.setCursor(0, 52);
     oled.setTextSize(1);
     oled.print(text);
 
     sprintf(text,"r%d", robId);
-    oled.setCursor(0, 12);
+    oled.setCursor(0, 0);
     oled.setTextSize(2);
     oled.print(text);
     
     oled.drawCircle(64, 32, 31, WHITE);
-    oled.drawLine(64, 32, x + 64, y + 32, WHITE);
+    oled.drawLine(64 - x2, 32 - y2, x + 64, y + 32, WHITE);
+    oled.drawCircle(64, 32, 3, WHITE);
     oled.display();
 }
 
