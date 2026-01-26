@@ -506,7 +506,6 @@ void setup()
 
         // zunächst nur Blinken (Funkeln) - per Zufall ! 
 
-//        set_microros_wifi_transports((char*)WIFI_SSID, (char*)WIFI_PASS, (char*)AGENT_IP, AGENT_PORT);
         set_microros_wifi_transports((char*) ssidWord.c_str(), 
                                      (char*) password.c_str(), 
                                      (char*) ipNode.c_str(), AGENT_PORT);
@@ -533,7 +532,9 @@ void setup()
             }
         }     
 
-
+/*******************/
+/*  ros2 init:     */
+/*******************/
 
         printf("autonomous mode: phase == 1:  start ros2\n");
 
@@ -608,6 +609,10 @@ void setup()
 
         printf("ros2 init abgeschlossen!\n");
 
+/*******************/
+/*  ros2 loop:      */
+/*******************/
+    
         for(;;) // "main loop autonomous - ros2"
         {
             watch = 2000; // wozu watch.. ? 
@@ -622,8 +627,7 @@ void setup()
 		            // oneSecFlag = FALSE; ursprünglich verwende ich hier oneSecFlag statt flagE -
                     // und als msg habe ich einfach mit msg++ immer neue Werte erzeigt. 
                     msg = actualAngle;
-                    out_msg.data = (int32_t)msg; 
-		            //out_msg.data = (int32_t)msg; msg++;
+                    out_msg.data = (int32_t)msg;  //out_msg.data = (int32_t)msg; msg++;
 		            ret = rcl_publish(&publisher, &out_msg, NULL);
 		            if (ret) printf("publishing returns %d\n", ret);
 	            }
@@ -654,6 +658,10 @@ void setup()
             }
         }         
     }
+
+/*******************/
+/* all other inits:*/
+/*******************/
 
     switch (mode)   // Init Phase: 
     {
@@ -740,8 +748,8 @@ void setup()
 
             /* TX2 ist noch immer low - dadurch wurde ja gespeichert - darum erst warten, wis der TX2 sicher high ist */
 
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);// warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);// warten bis Kabel wieder gesteckt ist.
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
 
@@ -766,8 +774,8 @@ void setup()
             printStored();
             printf("stored wifi: %s\n", (wsys == 0)? "home" : "work");
 
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
             // Controller wählen: 
@@ -787,8 +795,8 @@ void setup()
             printStored();
 
 
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
 
@@ -809,8 +817,8 @@ void setup()
 
             robName = readFromEEPROM(EEPROM_ROB_NAME);
 
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
             printf("----- calibrieren -------\n");
@@ -850,10 +858,10 @@ void setup()
             vLSum = vRSum = 0;
             lastAngle = 0;
             lastTicL  = lastTicR = 0;
-
             count = 0;
                    
             drive(255, -255);   // dreh dich schnell! damit möglichst wenig Störung durch Funken des Motors passiert.
+
             watch = 7000; while(watch) // Sekunde
             {
                 calibrateMFS(); // findet xmax, min ymax, min
@@ -868,7 +876,6 @@ void setup()
  
                     // es kommt leider vor, dass Messwerte auch ganz daneben liegen. (zB externer Magnet in der Nähe)
                     // dann bleibt nichts übrig, als die Calibrierung zu wiederholen.
-
                     // hier wird der letzte der Durchläufe gespeichert. 
                     // die Werte differieren die ersten Durchläufe, dann sind sie nahezu konstant
                     // das System bewegt sich immer anders, während gleichförmiger Bewegung
@@ -899,25 +906,26 @@ void setup()
                 angle = getMFS_Angle();  
                 printComp(angle);
             }
-            
+           
 
-/*
+
             printReset();
 
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
-            while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist.
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
+            while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
-
 
             printf("Reset - done");
             esp_restart();
 
-*/
-
         break; 
     }
-
 }
+
+/*******************/
+/*  l o o p :      */
+/*******************/
+
 
 void loop() 
 {       
@@ -942,13 +950,6 @@ static char rxBuf[32];
 static int  rxPos = 0;
 int joyX = 0, joyY = 0;   // -128 .. +128
 
-
-/*
-    int SensorWert1 = analogRead(LDR1);
-    int SensorWert2 = analogRead(LDR2);
-    int SensorWert3 = analogRead(LDR3);
-    int SensorWert4 = analogRead(LDR4);
-*/
 
     switch (mode)
     {
@@ -1202,9 +1203,6 @@ int joyX = 0, joyY = 0;   // -128 .. +128
             {
                 qSecFlag = FALSE;
 
-//        printf("prell: %d ldr1-4: %d %D %d %d\n", prell, SensorWert1, SensorWert2, SensorWert3, SensorWert4);
-//        BT.write((uint8_t)prell + '0');
-
             // distance: 
 
                 digitalWrite(TRIG_PIN, LOW);        delay(5);
@@ -1230,7 +1228,6 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                         leds[3] = CRGB{0, 0, 255};
 
                         FastLED.show();
-
                         
                         drive(255,255);
                         if (distance <= 10) {stateBT = ROTATE; drive(0,0);}
@@ -1241,8 +1238,6 @@ int joyX = 0, joyY = 0;   // -128 .. +128
                         else if (distance <= 40) drive(220,220);
                         else if (distance <= 60) drive(250,250);
                        
-
-
                     }
                     else
                     {
@@ -1293,7 +1288,6 @@ void switchLedsOn(int ps, int sMode)
     }
 
     FastLED.show();
-
 }
 
 
@@ -1359,7 +1353,6 @@ void prepareMFSCalibrationSystem(void)
     xMin = yMin = 32767;
     xMax = yMax = -32768;
 }
-
 
 void readRawMFS(int16_t* x, int16_t* y, int16_t* z)
 {
@@ -1471,9 +1464,6 @@ float getMFS_Angle()
         else 
         {
             angle = 0.;
-// Tests:
-//        printf("*,%d,%d,%d,%d,%d,%d,%f,%f,%f\n",  
-//             xMax, xMin, yMax, yMin,x, y, xw, yw, angle);  
         }
 
         if (angle < -90.) angle += 360.;
@@ -1494,6 +1484,7 @@ float getMFS_Angle()
 }
 
 // OLED DISPLAY:
+
 void printComp(float w)
 {
     int x, y;
@@ -1502,8 +1493,8 @@ void printComp(float w)
     x = 28 * cos(w * M_PI / 180.);
     y = 28 * sin(w * M_PI / 180.);
 
-    x2 = x/4;
-    y2 = y/4;
+    x2 = x/2;
+    y2 = y/2;
 
 
     oled.fillRect(0, 0, 128, 64, 0); // clear all!
@@ -1524,9 +1515,9 @@ void printComp(float w)
     oled.drawCircle(64, 32, 31, WHITE);
     oled.drawLine(64 - x2, 32 - y2, x + 64, y + 32, WHITE);
     oled.drawCircle(64, 32, 3, WHITE);
+    oled.drawCircle(64, 32, 2, WHITE);
     oled.display();
 }
-
 
 void printSpeedMin(int i)
 {
@@ -1636,12 +1627,6 @@ void printData(void)
         oled.setCursor(20, 32);
         oled.print(text);
 
-/*
-        digitalWrite(TRIG_PIN, LOW);        delay(5);
-        digitalWrite(TRIG_PIN, HIGH);       delay(5);
-        digitalWrite(TRIG_PIN, LOW);        
-        distance = pulseIn(ECHO_PIN, HIGH) / 58.23;   // durch 58.23 
-*/
         if (connected == 0)
         {
             sprintf(text,"d:       ");
@@ -1655,10 +1640,6 @@ void printData(void)
             oled.setCursor(20, 48);
             oled.print(text);
         }
-
-    // oled.drawRect(10, 25, 40, 15, WHITE); // links, unten, breit, hoch
-    // oled.drawLine(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
-    // oled.drawCircle(64, 32, 31, WHITE);
         oled.display();
     }
 }
@@ -1733,43 +1714,39 @@ String readFromEEPROM(int address)
 void preSet(void)
 {
     //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
-    //storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
-    //storeStr2EEPROM("0",              EEPROM_WIFI_SYS_ADDR);   
+    //storeInt2EEPROM(128, EEPROM_BRIGHTNESS_LEVEL);     
+    //storeStr2EEPROM("0", EEPROM_WIFI_SYS_ADDR);   
 /*
-    storeStr2EEPROM("A1-7DC69BC1-1287",    EEPROM_WIFI_0_SSID_ADDR); 
-    storeStr2EEPROM("XYZHvCtieELY4tVFs", EEPROM_WIFI_0_PASS_ADDR);
-    storeStr2EEPROM("10.0.0.229",     EEPROM_WIFI_0_IP_ADDR);
-    storeStr2EEPROM("...",   EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
-    storeStr2EEPROM("...",   EEPROM_WIFI_1_PASS_ADDR);
-    storeStr2EEPROM("...",  EEPROM_WIFI_1_IP_ADDR);
+    storeStr2EEPROM("...", EEPROM_WIFI_0_SSID_ADDR); 
+    storeStr2EEPROM("...", EEPROM_WIFI_0_PASS_ADDR);
+    storeStr2EEPROM("...", EEPROM_WIFI_0_IP_ADDR);
+    storeStr2EEPROM("...", EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
+    storeStr2EEPROM("...", EEPROM_WIFI_1_PASS_ADDR);
+    storeStr2EEPROM("...", EEPROM_WIFI_1_IP_ADDR);
+    
     das brauchen wir nur, wenn wirklich einmal ein neues System dazu kommt! */
 }
 
 void getSet(void)
 {
     byte high, low;
-    robName = readFromEEPROM(EEPROM_ROB_NAME); 
-    robId = (char)robName[3] - '0';
+    robName  = readFromEEPROM(EEPROM_ROB_NAME); 
+    robId    = (char)robName[3] - '0';
     minSpeed = getIntFromEEPROM(EEPROM_MIN_SPEED);
     motorSysFromEEPROM = readFromEEPROM(EEPROM_MOTOR_SYS_ADDR);
     motorSys = (char)motorSysFromEEPROM[0] - '0';
-
     circleTicsL = getIntFromEEPROM(EEPROM_CIRCLE_TICS_L);
     circleTicsR = getIntFromEEPROM(EEPROM_CIRCLE_TICS_R);
-
     motorSysFromEEPROM = readFromEEPROM(EEPROM_WIFI_SYS_ADDR);
-    wifiSys = (char)motorSysFromEEPROM[0] - '0';
-   
+    wifiSys  = (char)motorSysFromEEPROM[0] - '0';
     ssidWord = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_SSID_ADDR):readFromEEPROM(EEPROM_WIFI_1_SSID_ADDR);
     password = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_PASS_ADDR):readFromEEPROM(EEPROM_WIFI_1_PASS_ADDR);
     ipNode   = (wifiSys == 0)? readFromEEPROM(EEPROM_WIFI_0_IP_ADDR)  :readFromEEPROM(EEPROM_WIFI_1_IP_ADDR);
-   
-    ps = getIntFromEEPROM(EEPROM_PS4_ADDR);
+    ps   = getIntFromEEPROM(EEPROM_PS4_ADDR);
     xMin = getIntFromEEPROM(EEPROM_MFS_MINX);
     xMax = getIntFromEEPROM(EEPROM_MFS_MAXX);
     yMin = getIntFromEEPROM(EEPROM_MFS_MINY);
     yMax = getIntFromEEPROM(EEPROM_MFS_MAXY);
-   
 }
 
 void scanI2CBus()  // for checks
@@ -1803,16 +1780,17 @@ void drive(int left, int right)
     vR = right;
 }
 
-void driveC(int l, int r)
+void driveC(int l, int r)  // calibriertes Fahren, derzeit nicht in Verwendung
 {
     int lc, rc;
     lc = (int)((l) * (1 - correctionRL));
     rc = (int)(r * (1 + correctionRL));
-     drive(lc , rc);
-     printf("driveC lc: %03d rc %03d\n", lc, rc);
+    drive(lc , rc);
+    printf("driveC lc: %03d rc %03d\n", lc, rc);
 }
 
 // lights:
+
 void onBoardLedOn(void)
 {
     digitalWrite(ON_BOARD_LED, LOW);  // it's inverese connected
