@@ -166,7 +166,7 @@ int circleMode;
 int circleTicsL, circleTicsR; 
 int wishedAngle;
 int flagC, flagD, flagE; 
-int storeAngle;
+int actualAngle;
 
 float correctionRL; 
 volatile int countR = 0;
@@ -297,7 +297,8 @@ void speed_callback(const void * msgin)
             break; 
 
             case CMD_DATA:
-                 storeAngle = getMFS_Angle();;
+                 actualAngle = getMFS_Angle();;
+                 printComp(actualAngle);
                  flagD = TRUE; 
             break; 
 
@@ -618,8 +619,9 @@ void setup()
 
                 if (flagE) // falls schon jemand etwas senden möchte  -> besser in ein command auslagern? 
 	            {
-		            oneSecFlag = FALSE;
-                    msg = storeAngle;
+		            // oneSecFlag = FALSE; ursprünglich verwende ich hier oneSecFlag statt flagE -
+                    // und als msg habe ich einfach mit msg++ immer neue Werte erzeigt. 
+                    msg = actualAngle;
                     out_msg.data = (int32_t)msg; 
 		            //out_msg.data = (int32_t)msg; msg++;
 		            ret = rcl_publish(&publisher, &out_msg, NULL);
@@ -1512,7 +1514,14 @@ void printComp(float w)
 
     sprintf(text,"%.1f", w);
     oled.setCursor(0, 48);
+    oled.setTextSize(1);
     oled.print(text);
+
+    sprintf(text,"r%d", robId);
+    oled.setCursor(0, 12);
+    oled.setTextSize(2);
+    oled.print(text);
+    
     oled.drawCircle(64, 32, 31, WHITE);
     oled.drawLine(64, 32, x + 64, y + 32, WHITE);
     oled.display();
@@ -1726,13 +1735,14 @@ void preSet(void)
     //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
     //storeInt2EEPROM(128,  EEPROM_BRIGHTNESS_LEVEL);     
     //storeStr2EEPROM("0",              EEPROM_WIFI_SYS_ADDR);   
-    storeStr2EEPROM("A1-7DC69BC1",    EEPROM_WIFI_0_SSID_ADDR); 
-    storeStr2EEPROM("HvCtieELY4tVFs", EEPROM_WIFI_0_PASS_ADDR);
+/*
+    storeStr2EEPROM("A1-7DC69BC1-1287",    EEPROM_WIFI_0_SSID_ADDR); 
+    storeStr2EEPROM("XYZHvCtieELY4tVFs", EEPROM_WIFI_0_PASS_ADDR);
     storeStr2EEPROM("10.0.0.229",     EEPROM_WIFI_0_IP_ADDR);
-    storeStr2EEPROM("HTL-WLAN-IoT",   EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
-    storeStr2EEPROM("HTL2IoT!",       EEPROM_WIFI_1_PASS_ADDR);
-    storeStr2EEPROM("10.115.61.237",  EEPROM_WIFI_1_IP_ADDR);
-
+    storeStr2EEPROM("...",   EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
+    storeStr2EEPROM("...",   EEPROM_WIFI_1_PASS_ADDR);
+    storeStr2EEPROM("...",  EEPROM_WIFI_1_IP_ADDR);
+    das brauchen wir nur, wenn wirklich einmal ein neues System dazu kommt! */
 }
 
 void getSet(void)
