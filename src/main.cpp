@@ -127,9 +127,9 @@
 #define CMD_EMAIL                       0xe
 #define CMD_FLED                        0xf     
 
-#define STOP                            0 
-#define ROTATE                          1
-#define FIND_ANGLE                      2
+#define C_STOP                          0 
+#define C_ROTATE                        1
+#define C_FIND_ANGLE                    2
 
 
 // micro-ROS Variablen:
@@ -165,7 +165,7 @@ int circleMode;
 int circleTicsL, circleTicsR; 
 int wishedAngle;
 int flagC, flagD, flagE; 
-int actualAngle;
+int actualAngle, data;
 int impulse;
 
 float correctionRL; 
@@ -293,13 +293,28 @@ void speed_callback(const void * msgin)
             case CMD_COMP:
                 drive(0,0);
                 wishedAngle = msg->data.data[1];
-                flagC = ROTATE;
+                flagC = C_ROTATE;
             break; 
 
             case CMD_DATA:
-                 actualAngle = getMFS_Angle();;
-                 printComp(actualAngle);
-                 flagD = TRUE; 
+                switch(msg->data.data[1])
+                {
+                    case 3:
+                        data = circleTicsL;
+                    break; 
+                    case 4:
+                        data = circleTicsR;
+                    break; 
+                    case 5:
+                        data = circleTicsL + circleTicsR;;
+                    break; 
+
+                    case 0xc:
+                        data = actualAngle = getMFS_Angle();;
+                        printComp(actualAngle);
+                        flagD = TRUE; 
+                    break;
+                }        
             break; 
 
             case CMD_EMAIL:
@@ -450,7 +465,7 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
-    flagC = STOP;
+    flagC = C_STOP;
     flagD = flagE = FALSE;
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
@@ -626,13 +641,13 @@ void setup()
 	            {
 		            // oneSecFlag = FALSE; ursprünglich verwende ich hier oneSecFlag statt flagE -
                     // und als msg habe ich einfach mit msg++ immer neue Werte erzeigt. 
-                    msg = actualAngle;
+                    msg = data; // actualAngle;
                     out_msg.data = (int32_t)msg;  //out_msg.data = (int32_t)msg; msg++;
 		            ret = rcl_publish(&publisher, &out_msg, NULL);
 		            if (ret) printf("publishing returns %d\n", ret);
 	            }
 
-                if ((flagC == ROTATE))
+                if ((flagC == C_ROTATE))
                 {
                      impulse = wishedAngle - getMFS_Angle();
                      impulse += 360 + 360; 
@@ -640,10 +655,10 @@ void setup()
                      vLSum = vRSum = 0;
                      printf("rotate for %d ticks\n", impulse);
                      drive(125, -125);
-                     flagC = FIND_ANGLE;
+                     flagC = C_FIND_ANGLE;
                 }
 
-                if (flagC == FIND_ANGLE)
+                if (flagC == C_FIND_ANGLE)
                 {
                    
                     if ((vLSum + vRSum) > (impulse))  
@@ -651,7 +666,7 @@ void setup()
                         drive(0,0);
                         printf("angle %f impulse %d  sum %d \n", getMFS_Angle(), impulse,vLSum + vRSum);
                         printComp(getMFS_Angle());
-                        flagC = STOP;
+                        flagC = C_STOP;
                     }
                 }
 
