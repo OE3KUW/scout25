@@ -40,7 +40,16 @@
 
 // WLAN & Agent:
 /* */
-/* /
+
+//#define WIFI_SSID "A1-7DC69BC1" 
+//#define WIFI_PASS "HvCtieELY4tVFs" 
+//#define AGENT_IP "10.0.0.229" // IP vom Pi400 eth0 /* / 
+//#define WIFI_SSID "HTL-WLAN-IoT" 
+//#define WIFI_PASS "HTL2IoT!" 
+//#define AGENT_IP "10.115.61.237" // IP vom Pi400 wlan0 
+//#define AGENT_IP "172.17.0.1" // IP vom Pi400 wlan0 
+
+/*
 #define WIFI_SSID                       "..."
 #define WIFI_PASS                       "...!"
 #define AGENT_IP                        "..." // IP vom Pi400 wlan0
@@ -131,6 +140,13 @@
 #define C_ROTATE                        1
 #define C_FIND_ANGLE                    2
 
+#define MIS_STOP                        0x00
+#define MIS_FIND_ANGLE                  0x0a
+#define MIS_C                           0x0c
+#define MIS_D                           0x0d
+
+
+
 
 // micro-ROS Variablen:
 rcl_allocator_t    allocator;
@@ -164,7 +180,9 @@ int last_impulsCntR;
 int circleMode;
 int circleTicsL, circleTicsR; 
 int wishedAngle;
-int flagC, flagD, flagE; 
+int wishedSpeed;
+int mission;
+int flagE;
 int actualAngle, data;
 int impulse;
 
@@ -282,7 +300,7 @@ void speed_callback(const void * msgin)
 
     if ((Id == robId) || Id == 0)  // Id == 0: command for every! rob 
     {
-        printf("lf %x rb %x ", lf, rb);
+        printf("data[1] = lf =  %x data[2] = rb = %x \n", lf, rb);
         switch(cmd)
         {
             case CMD_DRIVE: 
@@ -293,7 +311,9 @@ void speed_callback(const void * msgin)
             case CMD_COMP:
                 drive(0,0);
                 wishedAngle = msg->data.data[1];
-                flagC = C_ROTATE;
+                wishedSpeed = msg->data.data[2];
+                //flagC = C_ROTATE;
+                mission = MIS_C;
             break; 
 
             case CMD_DATA:
@@ -312,13 +332,15 @@ void speed_callback(const void * msgin)
                     case 0xc:
                         data = actualAngle = getMFS_Angle();;
                         printComp(actualAngle);
-                        flagD = TRUE; 
+                        //flagD = TRUE; 
+                        mission = MIS_D;
                     break;
                 }        
             break; 
 
             case CMD_EMAIL:
                  flagE = TRUE;
+                 printf("e->Mail\n");
             break; 
 
             case CMD_FLED:   
@@ -465,8 +487,8 @@ void setup()
     impulsFlagL = FALSE;  
     impulsFlagR = FALSE;  
     impulsCntL = impulsCntR = 0;
-    flagC = C_STOP;
-    flagD = flagE = FALSE;
+    mission = MIS_STOP;
+    flagE = FALSE;
 
     sei(); // start all interrupts!  especially printf, impulsCount and timer need this ... 
 
@@ -630,47 +652,52 @@ void setup()
     
         for(;;) // "main loop autonomous - ros2"
         {
-            watch = 2000; // wozu watch.. ? 
-            while(watch)
-            {
                 // autonomous loop:
-                
   	            rclc_executor_spin_some(&executor, RCL_MS_TO_NS(50)); // 50
 
-                if (flagE) // falls schon jemand etwas senden möchte  -> besser in ein command auslagern? 
-	            {
-		            // oneSecFlag = FALSE; ursprünglich verwende ich hier oneSecFlag statt flagE -
-                    // und als msg habe ich einfach mit msg++ immer neue Werte erzeigt. 
-                    msg = data; // actualAngle;
-                    out_msg.data = (int32_t)msg;  //out_msg.data = (int32_t)msg; msg++;
-		            ret = rcl_publish(&publisher, &out_msg, NULL);
-		            if (ret) printf("publishing returns %d\n", ret);
-	            }
-
-                if ((flagC == C_ROTATE))
+                switch(mission)
                 {
-                     impulse = wishedAngle - getMFS_Angle();
-                     impulse += 360 + 360; 
-                     impulse = impulse*(circleTicsL + circleTicsR)/360.; // circleTics brauchts für eine Runde
-                     vLSum = vRSum = 0;
-                     printf("rotate for %d ticks\n", impulse);
-                     drive(125, -125);
-                     flagC = C_FIND_ANGLE;
+                    case MIS_STOP:
+                         // do nothing .... 
+                    break; 
+
+                    case MIS_C:  // errechne die nötigen Impulse für den gewünschten Winkel:
+                        impulse = wishedAngle - getMFS_Angle();
+                        impulse += 360 + 360; 
+                        impulse = impulse*(circleTicsL + circleTicsR)/360.; // circleTics brauchts für eine Runde
+                        vLSum = vRSum = 0;
+                        printf("rotate for %d ticks\n", impulse);
+                        drive(wishedSpeed, -wishedSpeed);
+                        mission = MIS_FIND_ANGLE;
+                    break;
+
+                    case MIS_FIND_ANGLE:
+                        if ((vLSum + vRSum) > (impulse))  
+                        {
+                            drive(0,0);
+                            printf("angle %f impulse %d  sum %d \n", getMFS_Angle(), impulse,vLSum + vRSum);
+                            printComp(getMFS_Angle());
+                            mission = MIS_STOP;
+                        }                    
+                    break; 
+
+                    case MIS_D: 
+                         // derzeit noch keine weitere Aktivität von nöten... 
+                         mission = MIS_STOP;
+                    break;
+
                 }
 
-                if (flagC == C_FIND_ANGLE)
+                if (flagE)
                 {
-                   
-                    if ((vLSum + vRSum) > (impulse))  
-                    {
-                        drive(0,0);
-                        printf("angle %f impulse %d  sum %d \n", getMFS_Angle(), impulse,vLSum + vRSum);
-                        printComp(getMFS_Angle());
-                        flagC = C_STOP;
-                    }
+                        msg = data; // actualAngle;
+                        out_msg.data = (int32_t)msg;  //out_msg.data = (int32_t)msg; msg++;
+		                ret = rcl_publish(&publisher, &out_msg, NULL);
+		                if (ret) 
+                        {
+                            printf("publishing returns %d\n", ret);
+                        }
                 }
-
-            }
         }         
     }
 
@@ -1731,15 +1758,12 @@ void preSet(void)
     //storeStr2EEPROM("rob1", EEPROM_ROB_NAME);
     //storeInt2EEPROM(128, EEPROM_BRIGHTNESS_LEVEL);     
     //storeStr2EEPROM("0", EEPROM_WIFI_SYS_ADDR);   
-/*
-    storeStr2EEPROM("...", EEPROM_WIFI_0_SSID_ADDR); 
-    storeStr2EEPROM("...", EEPROM_WIFI_0_PASS_ADDR);
-    storeStr2EEPROM("...", EEPROM_WIFI_0_IP_ADDR);
-    storeStr2EEPROM("...", EEPROM_WIFI_1_SSID_ADDR); // das sind noch alte Daten... 
-    storeStr2EEPROM("...", EEPROM_WIFI_1_PASS_ADDR);
-    storeStr2EEPROM("...", EEPROM_WIFI_1_IP_ADDR);
+
+    // see: #TI/_SSID_PW/scout25.c
+
+
     
-    das brauchen wir nur, wenn wirklich einmal ein neues System dazu kommt! */
+    /* das brauchen wir nur, wenn wirklich einmal ein neues System dazu kommt! */
 }
 
 void getSet(void)
