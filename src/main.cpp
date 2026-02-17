@@ -841,7 +841,6 @@ void setup()
             while (digitalRead(TEST_PIN_TX2) == HIGH); watch = 10; while(watch);
             while (digitalRead(TEST_PIN_TX2) == HIGH); // warten bis Kabel wieder gesteckt ist. // PRELLSCHUTZ
 
-
             msys = 0;  // here: "msys" =  my system name - msys als Hilsvariable verwendet - statt robId
 
             while (digitalRead(TEST_PIN_TX2) == LOW)
@@ -893,8 +892,8 @@ void setup()
             count = 200; // wird jetzt als speed verwendet
 
                    
-            drive(-200, 200);   // dreh dich, "aufwärmen"
-            watch = 3000; while(watch); // Sekunden
+            drive(-240, 240);   // dreh dich, "aufwärmen"
+            watch = 2600; while(watch); // Sekunden
 
             prepareMFSCalibrationSystem();  // setzt nur die Variablen für höchsten und minimalsten Wert
             vLSum = vRSum = 0;
@@ -903,8 +902,10 @@ void setup()
             count = 0;
                    
             drive(255, -255);   // dreh dich schnell! damit möglichst wenig Störung durch Funken des Motors passiert.
+            
+            watch = 200; while(watch); // Vorlaufzeit!
 
-            watch = 7000; while(watch) // Sekunde
+            watch = 2400; while(watch) // Sekunde // 7 Sek? 
             {
                 calibrateMFS(); // findet xmax, min ymax, min
                 angle = getMFS_Angle(); 
@@ -1453,6 +1454,7 @@ int calibrateMFS(void)
     static int16_t lastx = 0, lasty = 0;
     static int firstCall = true; 
 
+
     readRawMFS(&x, &y, &z);
 
     // Ausreißer sollten eliminiert werden... (-4600...) 
@@ -1480,8 +1482,13 @@ int calibrateMFS(void)
 
     if ( ((xMax -xMin) > 180) && ((yMax -yMin) > 200)) ret = isCalibrated = TRUE; // store ins EEPROM ? wozu ? ....
 
-// Tests! printf("%04d, %04d, ", x, y); // during calibration mode 
+// Calibreirung:      
 
+/* Tests -> #Scripten/Bionics/Materialien/Magnetfeldsensor!
+printf("%04d, %04d, %04d, %04d,%04d, %04d \n", 
+    x + 1000, xMax + 1000, xMin + 1000, 
+    y + 1500, yMax + 1500, yMin + 1500); // during calibration mode 
+*/
     return ret;
 }
 
@@ -1760,9 +1767,6 @@ void preSet(void)
     //storeStr2EEPROM("0", EEPROM_WIFI_SYS_ADDR);   
 
     // see: #TI/_SSID_PW/scout25.c
-
-
-    
     /* das brauchen wir nur, wenn wirklich einmal ein neues System dazu kommt! */
 }
 
